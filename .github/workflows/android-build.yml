@@ -55,10 +55,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add build-log.txt
-          git diff --cached --stat
+          git add build-log.txt || true
+          git diff --cached --stat || true
           git commit -m "build log" || echo "Nothing to commit"
-          git push origin HEAD:android-gateway
+          git push origin HEAD:android-gateway || echo "Push failed (non-fatal)"
 
       - name: Search for APK
         if: always()
