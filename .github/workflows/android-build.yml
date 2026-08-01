@@ -28,15 +28,19 @@ jobs:
           build-tools: 34.0.0
 
       - name: Install Gradle
-        run: sudo apt-get update && sudo apt-get install -y gradle
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-7.6.3-bin.zip -O /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -C /tmp
+          echo "/tmp/gradle-7.6.3/bin" >> $GITHUB_PATH
 
-      - name: Make gradle wrapper executable
-        working-directory: android-app
-        run: chmod +x gradlew
+      - name: Check gradle version
+        run: gradle --version
 
-      - name: Build APK with gradle wrapper
+      - name: Build APK with system gradle
         working-directory: android-app
-        run: ./gradlew assembleRelease --no-daemon --stacktrace --info 2>&1 || true
+        run: |
+          echo "=== Building APK ==="
+          gradle clean assembleRelease --no-daemon --stacktrace 2>&1 || true
 
       - name: Search for APK
         working-directory: android-app
