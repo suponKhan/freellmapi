@@ -34,27 +34,31 @@ jobs:
       - name: Build APK
         working-directory: android-app
         run: |
-          echo "=== Environment ==="
-          echo "JAVA_HOME=$JAVA_HOME"
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          which gradle
-          gradle --version
-          echo "=== Building APK ==="
-          gradle clean assembleRelease --no-daemon --stacktrace > build-log.txt 2>&1 || true
-          echo "BUILD EXIT CODE: $?" >> build-log.txt
-          echo "=== Log head ==="
-          head -80 build-log.txt
+          set +e
+          {
+            echo "=== Environment ==="
+            echo "JAVA_HOME=$JAVA_HOME"
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+            which gradle
+            gradle --version
+            echo "=== Building APK ==="
+            gradle clean assembleRelease --no-daemon --console=plain --stacktrace
+            echo "BUILD EXIT CODE: $?"
+          } 2>&1 | tee build-log.txt
+          echo "=== LOG SIZE ==="
+          wc -c build-log.txt
 
-      - name: Push build log via API
+      - name: Push build log via git
         if: always()
+        working-directory: android-app
         run: |
-          cd android-app
-          B64=$(base64 -w0 build-log.txt)
-          curl -s -X PUT https://api.github.com/repos/suponKhan/freellmapi/contents/build-log.txt \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -d "{\"message\":\"build log\",\"branch\":\"android-gateway\",\"content\":\"$B64\"}" || true
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add build-log.txt
+          git diff --cached --stat
+          git commit -m "build log" || echo "Nothing to commit"
+          git push origin HEAD:android-gateway
 
       - name: Search for APK
         if: always()
@@ -66,6 +70,14 @@ jobs:
           ls -la app/build/outputs/ 2>/dev/null || echo "No outputs dir"
           ls -la app/build/outputs/apk/ 2>/dev/null || echo "No apk dir"
           ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir"
+
+      - name: Upload build log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: android-app/build-log.txt
+          if-no-files-found: warn
 
       - name: Upload APK artifact
         if: always()
