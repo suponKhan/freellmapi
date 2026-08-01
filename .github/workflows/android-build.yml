@@ -1,5 +1,4 @@
 name: android-build
-
 on:
   push:
     branches: [ android-gateway ]
@@ -19,29 +18,43 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          api-level: 34
-          build-tools: 34.0.0
+      - name: Install Android SDK command-line tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends unzip wget
+          mkdir -p $HOME/android_sdk/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O /tmp/cmdline.zip
+          unzip -q /tmp/cmdline.zip -d $HOME/android_sdk/cmdline-tools
+          export ANDROID_SDK_ROOT=$HOME/android_sdk
+          yes | $HOME/android_sdk/cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Install Gradle
-        run: sudo apt-get update && sudo apt-get install -y gradle
+      - name: Download Gradle distribution and create wrapper
+        # Use Gradle 7.5.1 which is compatible with Android Gradle Plugin ~7.4.x
+        run: |
+          set -e
+          GRADLE_VERSION=7.5.1
+          echo "Downloading Gradle ${GRADLE_VERSION} ..."
+          wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -O /tmp/gradle.zip
+          sudo unzip -q /tmp/gradle.zip -d /opt/gradle
+          export PATH=/opt/gradle/gradle-${GRADLE_VERSION}/bin:$PATH
+          gradle --version
+          # generate gradle wrapper inside android-app (if not present)
+          if [ ! -f android-app/gradlew ]; then
+            (cd android-app && gradle wrapper --gradle-version ${GRADLE_VERSION})
+            chmod +x android-app/gradlew || true
+          else
+            echo "Gradle wrapper already present"
+          fi
 
-      - name: Build APK
+      - name: Build APK using wrapper
         working-directory: android-app
         run: |
-          gradle assembleRelease --no-daemon --stacktrace || true
-          echo "=== Build outputs ==="
-          find . -name "*.apk" -type f
-          ls -la app/build/outputs/ 2>/dev/null || true
-          ls -la app/build/outputs/apk/ 2>/dev/null || true
-          ls -la app/build/outputs/apk/release/ 2>/dev/null || true
+          set -e
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace || true
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: freellm-gateway-apk
-          path: |
-            android-app/app/build/outputs/**/*.apk
-            android-app/app/build/outputs/apk/**/*.apk
+          path: android-app/app/build/outputs/**/*.apk
