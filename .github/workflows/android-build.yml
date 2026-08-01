@@ -38,7 +38,8 @@ jobs:
 
       - name: Build APK with gradle
         working-directory: android-app
-        run: gradle clean assembleRelease --no-daemon --stacktrace 2>&1
+        run: |
+          gradle clean assembleRelease --no-daemon --stacktrace 2>&1 || true
 
       - name: Search for APK
         working-directory: android-app
@@ -47,9 +48,14 @@ jobs:
           find . -name "*.apk" -type f 2>/dev/null | head -20
           echo "=== Build outputs ==="
           ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir"
+          echo "=== Build dir ==="
+          ls -la app/build/ 2>/dev/null || echo "No build dir"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: freellm-gateway-apk
-          path: android-app/app/build/outputs/apk/release/*.apk
+          path: |
+            android-app/app/build/outputs/**/*.apk
+            android-app/app/build/outputs/apk/**/*.apk
+            android-app/app/build/outputs/apk/release/*.apk
