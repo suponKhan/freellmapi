@@ -33,13 +33,11 @@ jobs:
       - name: Check gradle version
         run: gradle --version
 
-      - name: Generate Gradle wrapper
+      - name: Build APK with system gradle
         working-directory: android-app
-        run: gradle wrapper --gradle-version 8.0.2 --distribution-type all
-
-      - name: Build APK with wrapper
-        working-directory: android-app
-        run: ./gradlew assembleRelease --no-daemon --stacktrace --info 2>&1 || true
+        run: |
+          echo "=== Building APK with system gradle ==="
+          gradle assembleRelease --no-daemon --stacktrace --info 2>&1 || true
 
       - name: Search for APK
         working-directory: android-app
