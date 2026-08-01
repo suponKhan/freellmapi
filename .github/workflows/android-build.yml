@@ -19,20 +19,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           api-level: 34
           build-tools: 34.0.0
 
-      - name: Install Gradle
+      - name: Download Gradle
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gradle
+          wget -q https://services.gradle.org/distributions/gradle-8.0.2-all.zip -O /tmp/gradle.zip
+          mkdir -p $HOME/gradle
+          unzip -q /tmp/gradle.zip -d $HOME/gradle
+          echo "GRADLE_HOME=$HOME/gradle/gradle-8.0.2" >> $GITHUB_ENV
+          echo "PATH=$PATH:$HOME/gradle/gradle-8.0.2/bin" >> $GITHUB_PATH
 
       - name: Generate Gradle wrapper
         working-directory: android-app
-        run: gradle wrapper --gradle-version 8.0.2 --distribution-type all
+        run: $HOME/gradle/gradle-8.0.2/bin/gradle wrapper --gradle-version 8.0.2 --distribution-type all
 
       - name: Build APK
         working-directory: android-app
