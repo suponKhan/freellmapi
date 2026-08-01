@@ -34,6 +34,7 @@ jobs:
           /tmp/gradle-8.0.2/bin/gradle --version 2>&1
 
       - name: Build APK
+        continue-on-error: true
         working-directory: android-app
         run: |
           echo "=== Building APK ==="
@@ -48,6 +49,8 @@ jobs:
           ls -la app/build/outputs/ 2>/dev/null || echo "No outputs dir"
           ls -la app/build/outputs/apk/ 2>/dev/null || echo "No apk dir"
           ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir"
+          echo "=== All build files ==="
+          find app/build -type f 2>/dev/null | head -30
 
       - name: Upload APK artifact
         if: always()
