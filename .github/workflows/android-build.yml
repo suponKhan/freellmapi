@@ -48,6 +48,8 @@ jobs:
           ls -la app/build/outputs/ 2>/dev/null || echo "No outputs dir"
           ls -la app/build/outputs/apk/ 2>/dev/null || echo "No apk dir"
           ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir"
+          echo "=== All files in build/outputs ==="
+          find app/build/outputs -type f 2>/dev/null | head -30
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
