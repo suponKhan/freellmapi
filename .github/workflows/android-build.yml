@@ -19,24 +19,17 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK command-line tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends unzip wget
-          mkdir -p \C:\Users\khans/android_sdk/cmdline-tools
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O /tmp/cmdline.zip
-          unzip -q /tmp/cmdline.zip -d \C:\Users\khans/android_sdk/cmdline-tools
-          export ANDROID_SDK_ROOT=\C:\Users\khans/android_sdk
-          yes | \C:\Users\khans/android_sdk/cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=\ "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          build-tools: 34.0.0
 
-      - name: Install gradle (system package)
-        run: |
-          sudo apt-get install -y gradle
+      - name: Generate Gradle wrapper
+        run: cd android-app && gradle wrapper --gradle-version 8.0.2 --distribution-type all
 
-      - name: Build APK (attempt)
-        working-directory: android-app
-        run: |
-          gradle assembleRelease || true
+      - name: Build APK
+        run: cd android-app && ./gradlew assembleRelease || true
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
