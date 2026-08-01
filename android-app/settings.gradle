@@ -1,1 +1,11 @@
+pluginManagement {
+    buildscript {
+        repositories {
+            google()
+            mavenCentral()
+        }
+    }
+}
+
+rootProject.name = "freellm-gateway"
 include ":app"
