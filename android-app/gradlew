@@ -1,4 +1,19 @@
 #!/bin/sh
+#
+# Copyright 2015 the original program author.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 
 ##############################################################################
 #
@@ -8,20 +23,15 @@
 
 set -e
 
+# For the debian wrapper script, we want to use a JVM that is the same as the
+# java version specified in setup-java action.
+
 APP_NAME="gradle"
 APP_BASENAME=$(basename "$0")
 
 # Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
 DEFAULT_JVM_OPTS=${DEFAULT_JVM_OPTS:-"-Xmx64m -Xms64m"}
 # Use the maximum available, or the specified max heap size.
-MAX_NATIVE_MEMORY=${MAX_NATIVE_MEMORY:-0}
-
-# Resolve logs and install/actual installation path
-APP_HOME=$(cd "${BASH_SOURCE:-$0}" && cd "$(dirname -- "${BASH_SOURCE:-$0}")" && pwd) 2>/dev/null
-if [ "$APP_HOME" = "." ]; then APP_HOME=$(pwd); fi
-
-# Make this the default maximum for Gradle
-DEFAULT_JVM_MAX_HEAP_SIZE=${DEFAULT_JVM_MAX_HEAP_SIZE:-256m}
 MAX_NATIVE_MEMORY=${MAX_NATIVE_MEMORY:-0}
 
 # Path to the Gradle user's home directory
@@ -34,12 +44,35 @@ fi
 # Path to the Gradle wrapper jar
 WRAPPER_JAR="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
 
+# Resolve logs and install/actual installation path
+APP_HOME=$(cd "${BASH_SOURCE:-$0}" && cd "$(dirname -- "${BASH_SOURCE:-$0}")" && pwd) 2>/dev/null
+if [ "$APP_HOME" = "." ]; then APP_HOME=$(pwd); fi
+
+# Make this the default maximum for Gradle
+DEFAULT_JVM_MAX_HEAP_SIZE=${DEFAULT_JVM_MAX_HEAP_SIZE:-256m}
+
 # If the wrapper jar is not present, download it
-if [ ! -f "$WRAPPER_JAR" ]; then
+if [ ! -f "$APP_HOME/gradle/wrapper/gradle-wrapper.jar" ]; then
   echo "Gradle wrapper jar not found, downloading..."
   wget -q "https://services.gradle.org/distributions/gradle-7.6.3-bin.zip" -O /tmp/gradle.zip
-  sudo unzip -q /tmp/gradle.zip -d /opt/gradle
-  /opt/gradle/gradle-7.6.3/bin/gradle wrapper --gradle-version 7.6.3 --distribution-type all $APP_HOME
+  unzip -q /tmp/gradle.zip -C /tmp
+  /tmp/gradle-7.6.3/bin/gradle wrapper --gradle-version 7.6.3 --distribution-type all "$APP_HOME"
 fi
 
-exec "$APP_HOME/gradlew" "$@"
+WRAPPER_JAR="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+JAVACMD="java"
+if [ -n "$JAVA_HOME" ] ; then
+    if [ -x "$JAVA_HOME/bin/java" ]; then
+      JAVACMD="$JAVA_HOME/bin/java"
+    else
+      echo "Error: JAVA_HOME is set to an invalid directory: $JAVA_HOME" >&2
+    fi
+fi
+
+# Add default JVM options if not set
+if [ -z "$JAVA_OPTS" ]; then
+  JAVA_OPTS="$DEFAULT_JVM_OPTS"
+fi
+
+# Resolve the Gradle distribution by executing the wrapper
+exec "$JAVACMD" $JAVA_OPTS -classpath "$WRAPPER_JAR" org.gradle.wrapper.GradleWrapperMain "$APP_HOME" "$@"

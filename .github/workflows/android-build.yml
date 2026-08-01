@@ -33,45 +33,26 @@ jobs:
           unzip -q /tmp/gradle.zip -C /tmp
           echo "/tmp/gradle-7.6.3/bin" >> $GITHUB_PATH
 
-      - name: Check gradle version
-        run: gradle --version
+      - name: Make gradlew executable
+        working-directory: android-app
+        run: chmod +x gradlew
 
       - name: Build APK with gradle
         working-directory: android-app
         run: |
-          echo "=== Android SDK env vars ==="
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          echo "ANDROID_USER_HOME=$ANDROID_USER_HOME"
           echo "=== Building APK ==="
-          gradle clean assembleRelease --no-daemon --stacktrace 2>&1 | tee /tmp/build-output.txt
-          echo "BUILD EXIT CODE: ${PIPESTATUS[0]}"
-
-      - name: Show build output
-        working-directory: android-app
-        run: |
-          echo "=== Build output ==="
-          head -200 /tmp/build-output.txt
-          echo "..."
-          tail -50 /tmp/build-output.txt
+          gradle clean assembleRelease --no-daemon --stacktrace
 
       - name: Search for APK
         working-directory: android-app
         run: |
           echo "=== APK files ==="
           find . -name "*.apk" -type f
-          echo "=== Build dir ==="
-          ls -la app/build/ 2>/dev/null || echo "No build dir"
-          ls -la app/build/outputs/ 2>/dev/null || echo "No outputs dir"
-          ls -la app/build/outputs/apk/ 2>/dev/null || echo "No apk dir"
+          echo "=== Build outputs ==="
           ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir"
 
       - name: Upload APK artifact
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: freellm-gateway-apk
-          path: |
-            android-app/app/build/outputs/**/*.apk
-            android-app/app/build/outputs/apk/**/*.apk
-            android-app/app/build/outputs/apk/release/*.apk
+          path: android-app/app/build/outputs/apk/release/*.apk
