@@ -7,9 +7,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
 
     steps:
       - name: Checkout
@@ -27,21 +24,19 @@ jobs:
           api-level: 34
           build-tools: 34.0.0
 
-      - name: Download Gradle 8.0.2
+      - name: Download and extract Gradle 8.0.2
         run: |
           cd /tmp
-          wget -q https://services.gradle.org/distributions/gradle-8.0.2-bin.zip -O gradle.zip
-          if [ ! -f gradle.zip ]; then
-            echo "Download failed, trying alternate URL..."
-            wget -q https://downloads.gradle-dn.com/distributions/gradle-8.0.2-bin.zip -O gradle.zip
-          fi
+          wget -v https://services.gradle.org/distributions/gradle-8.0.2-bin.zip -O gradle.zip 2>&1
+          echo "Download exit code: $?"
+          ls -la /tmp/gradle.zip
           unzip -q gradle.zip
-          echo "Gradle extracted to:"
-          ls -la /tmp/gradle-8.0.2/bin/
+          /tmp/gradle-8.0.2/bin/gradle --version
 
       - name: Build APK
         working-directory: android-app
         run: |
+          echo "=== Building APK ==="
           /tmp/gradle-8.0.2/bin/gradle clean assembleRelease --no-daemon --stacktrace 2>&1 || true
 
       - name: Search for APK
