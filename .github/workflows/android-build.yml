@@ -18,27 +18,39 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
+      - name: Install Android SDK
         uses: android-actions/setup-android@v3
         with:
           api-level: 34
           build-tools: 34.0.0
 
-      - name: Build Android APK
-        uses: android-actions/build.gradle@v2
+      - name: Set up Gradle
+        uses: gradle/gradle-build-action@v3
         with:
-          project: android-app
-          task: assembleRelease
+          gradle-version: 8.0.2
 
-      - name: List APK files
+      - name: Build APK
+        working-directory: android-app
         run: |
-          echo "=== Searching for APK files ==="
-          find . -name "*.apk" -type f
-          echo "=== Checking build outputs ==="
-          ls -la android-app/app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir found"
+          echo "=== Building APK ==="
+          gradle clean assembleRelease --no-daemon --stacktrace 2>&1
+
+      - name: Search for APK
+        working-directory: android-app
+        run: |
+          echo "=== APK files ==="
+          find . -name "*.apk" -type f 2>/dev/null
+          echo "=== Build outputs ==="
+          ls -la app/build/outputs/ 2>/dev/null || echo "No outputs dir"
+          ls -la app/build/outputs/apk/ 2>/dev/null || echo "No apk dir"
+          ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir"
 
       - name: Upload APK artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: freellm-gateway-apk
-          path: android-app/app/build/outputs/apk/release/*.apk
+          path: |
+            android-app/app/build/outputs/**/*.apk
+            android-app/app/build/outputs/apk/**/*.apk
+            android-app/app/build/outputs/apk/release/*.apk
