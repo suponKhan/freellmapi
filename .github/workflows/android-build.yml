@@ -11,10 +11,6 @@ jobs:
       run:
         shell: bash -l {0}
 
-    env:
-      JAVA_HOME: /usr/lib/jvm/temurin-17-jdk
-      GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx2g"
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,6 +35,8 @@ jobs:
       - name: Generate Gradle wrapper
         working-directory: android-app
         run: |
+          which gradle
+          gradle --version
           gradle wrapper --gradle-version 7.6.3 --distribution-type all
           chmod +x gradlew
 
