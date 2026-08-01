@@ -7,9 +7,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash -l {0}
 
     steps:
       - name: Checkout
@@ -31,24 +28,20 @@ jobs:
         run: |
           wget -q https://services.gradle.org/distributions/gradle-7.6.3-bin.zip -O /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -C /tmp
-          echo "/tmp/gradle-7.6.3/bin" >> $GITHUB_PATH
-
-      - name: Check gradle version
-        run: gradle --version
+          /tmp/gradle-7.6.3/bin/gradle --version
 
       - name: Build APK with gradle
         working-directory: android-app
         run: |
           echo "=== Building APK ==="
-          gradle clean assembleRelease --no-daemon --stacktrace 2>&1 || true
-          echo "=== Build completed ==="
+          /tmp/gradle-7.6.3/bin/gradle clean assembleRelease --no-daemon --stacktrace 2>&1 || true
 
       - name: Search for APK
         working-directory: android-app
         run: |
           echo "=== APK files ==="
           find . -name "*.apk" -type f
-          echo "=== Build outputs ==="
+          echo "=== Build dir ==="
           ls -la app/build/ 2>/dev/null || echo "No build dir"
           ls -la app/build/outputs/ 2>/dev/null || echo "No outputs dir"
           ls -la app/build/outputs/apk/ 2>/dev/null || echo "No apk dir"
