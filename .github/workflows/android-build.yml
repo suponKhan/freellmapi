@@ -31,6 +31,14 @@ jobs:
         with:
           gradle-version: 8.2.1
 
+      - name: Generate debug keystore
+        working-directory: android-app
+        run: |
+          keytool -genkeypair -v -keystore app/debug.keystore \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+
       - name: Build APK
         working-directory: android-app
         run: |
@@ -44,7 +52,9 @@ jobs:
             gradle --version
             echo "=== Building APK ==="
             gradle clean assembleRelease --no-daemon --console=plain --stacktrace
-            echo "BUILD EXIT CODE: $?"
+            BUILD_EXIT=$?
+            echo "BUILD EXIT CODE: $BUILD_EXIT"
+            exit $BUILD_EXIT
           } 2>&1 | tee build-log.txt
           echo "=== LOG SIZE ==="
           wc -c build-log.txt
