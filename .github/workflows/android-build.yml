@@ -31,12 +31,14 @@ jobs:
           api-level: 34
           build-tools: 34.0.0
 
-      - name: Download Gradle 7.6 and generate wrapper
+      - name: Set up Gradle
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 7.6.3
+
+      - name: Generate Gradle wrapper
+        working-directory: android-app
         run: |
-          wget -q https://services.gradle.org/distributions/gradle-7.6.3-bin.zip -O /tmp/gradle.zip
-          unzip -q /tmp/gradle.zip -d $HOME/gradle
-          export PATH="$HOME/gradle/gradle-7.6.3/bin:$PATH"
-          cd android-app
           gradle wrapper --gradle-version 7.6.3 --distribution-type all
           chmod +x gradlew
 
