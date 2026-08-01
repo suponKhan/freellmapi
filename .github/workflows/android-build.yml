@@ -37,7 +37,9 @@ jobs:
         working-directory: android-app
         run: |
           echo "=== Building APK with system gradle ==="
-          gradle clean assembleRelease --no-daemon --stacktrace --info 2>&1 || true
+          set -e
+          gradle clean assembleRelease --no-daemon --stacktrace --info 2>&1
+          echo "Build exit code: $?"
 
       - name: Search for APK
         working-directory: android-app
