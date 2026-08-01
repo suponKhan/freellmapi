@@ -27,20 +27,18 @@ jobs:
           api-level: 34
           build-tools: 34.0.0
 
-      - name: Install Gradle
+      - name: Download Gradle 8.0.2
         run: |
-          wget -q https://services.gradle.org/distributions/gradle-7.6.3-bin.zip -O /tmp/gradle.zip
+          wget -q https://services.gradle.org/distributions/gradle-8.0.2-bin.zip -O /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -C /tmp
-          echo "/tmp/gradle-7.6.3/bin" >> $GITHUB_PATH
+          echo "/tmp/gradle-8.0.2/bin" >> $GITHUB_PATH
 
       - name: Check gradle version
         run: gradle --version
 
-      - name: Build APK with system gradle
+      - name: Build APK with gradle
         working-directory: android-app
-        run: |
-          echo "=== Building APK ==="
-          gradle clean assembleRelease --no-daemon --stacktrace 2>&1 || true
+        run: gradle clean assembleRelease --no-daemon --stacktrace 2>&1
 
       - name: Search for APK
         working-directory: android-app
@@ -54,7 +52,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: freellm-gateway-apk
-          path: |
-            android-app/app/build/outputs/**/*.apk
-            android-app/app/build/outputs/apk/**/*.apk
-            android-app/app/build/outputs/apk/release/*.apk
+          path: android-app/app/build/outputs/apk/release/*.apk
