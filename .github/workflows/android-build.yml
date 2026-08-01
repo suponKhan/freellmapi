@@ -24,21 +24,16 @@ jobs:
           api-level: 34
           build-tools: 34.0.0
 
-      - name: Download and extract Gradle 8.0.2
-        run: |
-          cd /tmp
-          wget -v https://services.gradle.org/distributions/gradle-8.0.2-bin.zip -O gradle.zip 2>&1
-          echo "Download exit code: $?"
-          ls -la /tmp/gradle.zip
-          unzip -q gradle.zip
-          /tmp/gradle-8.0.2/bin/gradle --version 2>&1
+      - name: Set up Gradle
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.0.2
 
       - name: Build APK
-        continue-on-error: true
         working-directory: android-app
         run: |
           echo "=== Building APK ==="
-          /tmp/gradle-8.0.2/bin/gradle clean assembleRelease --no-daemon --stacktrace 2>&1
+          gradle clean assembleRelease --no-daemon --stacktrace 2>&1
 
       - name: Search for APK
         working-directory: android-app
@@ -49,8 +44,6 @@ jobs:
           ls -la app/build/outputs/ 2>/dev/null || echo "No outputs dir"
           ls -la app/build/outputs/apk/ 2>/dev/null || echo "No apk dir"
           ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir"
-          echo "=== All build files ==="
-          find app/build -type f 2>/dev/null | head -30
 
       - name: Upload APK artifact
         if: always()
