@@ -7,6 +7,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
 
     steps:
       - name: Checkout
@@ -18,40 +21,55 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK command-line tools
+      - name: Install Android SDK command-line tools, set env
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends unzip wget
-          mkdir -p $HOME/android_sdk/cmdline-tools
+          export ANDROID_SDK_ROOT="$HOME/android_sdk"
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          # Download and unzip command-line tools into expected layout
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O /tmp/cmdline.zip
-          unzip -q /tmp/cmdline.zip -d $HOME/android_sdk/cmdline-tools
-          export ANDROID_SDK_ROOT=$HOME/android_sdk
-          yes | $HOME/android_sdk/cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-
-      - name: Download Gradle distribution and create wrapper
-        # Use Gradle 7.5.1 which is compatible with Android Gradle Plugin ~7.4.x
-        run: |
-          set -e
-          GRADLE_VERSION=7.5.1
-          echo "Downloading Gradle ${GRADLE_VERSION} ..."
-          wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -O /tmp/gradle.zip
-          sudo unzip -q /tmp/gradle.zip -d /opt/gradle
-          export PATH=/opt/gradle/gradle-${GRADLE_VERSION}/bin:$PATH
-          gradle --version
-          # generate gradle wrapper inside android-app (if not present)
-          if [ ! -f android-app/gradlew ]; then
-            (cd android-app && gradle wrapper --gradle-version ${GRADLE_VERSION})
-            chmod +x android-app/gradlew || true
-          else
-            echo "Gradle wrapper already present"
+          unzip -q /tmp/cmdline.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
+          # Move extracted folder to "latest" (sdkmanager expects cmdline-tools/latest/bin)
+          if [ -d "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" ]; then
+            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          elif [ ! -d "$ANDROID_SDK_ROOT/cmdline-tools/latest" ]; then
+            # if some other layout exists, ensure latest exists
+            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
           fi
+          # Persist env for later steps
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH" >> $GITHUB_ENV
+          # Install required platform and build-tools and accept licenses
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses --sdk_root="$ANDROID_SDK_ROOT"
 
-      - name: Build APK using wrapper
+      - name: Prepare Gradle wrapper if missing
         working-directory: android-app
         run: |
-          set -e
-          chmod +x ./gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace || true
+          set -euo pipefail
+          # If project already has gradlew, skip. Otherwise generate a wrapper using a downloaded gradle.
+          if [ -x "./gradlew" ]; then
+            echo "Gradle wrapper present, will use ./gradlew"
+          else
+            echo "No gradlew present; downloading Gradle and generating wrapper"
+            GRADLE_VER="7.5.1"
+            wget -q "https://services.gradle.org/distributions/gradle-${GRADLE_VER}-bin.zip" -O /tmp/gradle.zip
+            sudo unzip -q /tmp/gradle.zip -d /opt/gradle
+            export PATH="/opt/gradle/gradle-${GRADLE_VER}/bin:$PATH"
+            # generate wrapper inside android-app
+            gradle wrapper --gradle-version "${GRADLE_VER}"
+            chmod +x ./gradlew || true
+          fi
+
+      - name: Build APK (use wrapper) — show failures
+        working-directory: android-app
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew || true
+          # Run wrapper and surface errors (no '|| true')
+          ./gradlew assembleRelease --no-daemon --stacktrace --info
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
