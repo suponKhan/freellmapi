@@ -34,29 +34,27 @@ jobs:
       - name: Build APK
         working-directory: android-app
         run: |
+          echo "=== Environment ==="
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          which gradle
+          gradle --version
           echo "=== Building APK ==="
-          gradle clean assembleRelease --no-daemon --stacktrace > build-log.txt 2>&1
+          gradle clean assembleRelease --no-daemon --stacktrace > build-log.txt 2>&1 || true
           echo "BUILD EXIT CODE: $?" >> build-log.txt
-          echo "--- log head ---"
-          head -50 build-log.txt
+          echo "=== Log head ==="
+          head -80 build-log.txt
 
       - name: Push build log via API
         if: always()
         run: |
           cd android-app
           B64=$(base64 -w0 build-log.txt)
-          python3 -c "
-import json, os, urllib.request
-b64 = '$B64'
-data = json.dumps({'message': 'build log', 'branch': 'android-gateway', 'content': b64}).encode()
-req = urllib.request.Request('https://api.github.com/repos/suponKhan/freellmapi/contents/build-log.txt',
-    data=data, headers={'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN'], 'User-Agent': 'actions'})
-try:
-    resp = urllib.request.urlopen(req)
-    print('Pushed log:', resp.status)
-except Exception as e:
-    print('Push failed:', e)
-"
+          curl -s -X PUT https://api.github.com/repos/suponKhan/freellmapi/contents/build-log.txt \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d "{\"message\":\"build log\",\"branch\":\"android-gateway\",\"content\":\"$B64\"}" || true
 
       - name: Search for APK
         if: always()
