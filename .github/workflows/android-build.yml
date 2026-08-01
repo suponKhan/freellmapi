@@ -25,21 +25,12 @@ jobs:
           api-level: 34
           build-tools: 34.0.0
 
-      - name: Download Gradle
-        run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.0.2-all.zip -O /tmp/gradle.zip
-          mkdir -p $HOME/gradle
-          unzip -q /tmp/gradle.zip -d $HOME/gradle
-          echo "GRADLE_HOME=$HOME/gradle/gradle-8.0.2" >> $GITHUB_ENV
-          echo "PATH=$PATH:$HOME/gradle/gradle-8.0.2/bin" >> $GITHUB_PATH
-
-      - name: Generate Gradle wrapper
-        working-directory: android-app
-        run: $HOME/gradle/gradle-8.0.2/bin/gradle wrapper --gradle-version 8.0.2 --distribution-type all
+      - name: Install Gradle
+        run: sudo apt-get update && sudo apt-get install -y gradle
 
       - name: Build APK
         working-directory: android-app
-        run: ./gradlew assembleRelease || true
+        run: gradle assembleRelease --no-daemon --stacktrace || true
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
