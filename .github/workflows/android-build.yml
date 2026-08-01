@@ -30,10 +30,24 @@ jobs:
       - name: Install Gradle
         run: sudo apt-get update && sudo apt-get install -y gradle
 
+      - name: Check project structure
+        working-directory: android-app
+        run: |
+          echo "=== Project structure ==="
+          find . -name "*.gradle" -o -name "AndroidManifest.xml" | head -20
+          echo "=== build.gradle content ==="
+          cat build.gradle
+          echo "=== app/build.gradle content ==="
+          cat app/build.gradle
+
       - name: Build APK
         working-directory: android-app
         run: |
-          gradle assembleRelease --no-daemon --stacktrace || true
+          gradle assembleRelease --no-daemon --stacktrace --info 2>&1 || true
+
+      - name: Search for APK
+        working-directory: android-app
+        run: |
           echo "=== Searching for APK files ==="
           find . -name "*.apk" -type f 2>/dev/null | head -20
           echo "=== Build outputs directory ==="
