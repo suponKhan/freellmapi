@@ -7,6 +7,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout
@@ -24,25 +27,29 @@ jobs:
           api-level: 34
           build-tools: 34.0.0
 
-      - name: Download Gradle 7.6.3
+      - name: Download Gradle 8.0.2
         run: |
-          wget -q https://services.gradle.org/distributions/gradle-7.6.3-bin.zip -O /tmp/gradle.zip
-          unzip -q /tmp/gradle.zip -C /tmp
-          /tmp/gradle-7.6.3/bin/gradle --version
+          cd /tmp
+          wget -q https://services.gradle.org/distributions/gradle-8.0.2-bin.zip -O gradle.zip
+          if [ ! -f gradle.zip ]; then
+            echo "Download failed, trying alternate URL..."
+            wget -q https://downloads.gradle-dn.com/distributions/gradle-8.0.2-bin.zip -O gradle.zip
+          fi
+          unzip -q gradle.zip
+          echo "Gradle extracted to:"
+          ls -la /tmp/gradle-8.0.2/bin/
 
-      - name: Build APK with gradle
+      - name: Build APK
         working-directory: android-app
         run: |
-          echo "=== Building APK ==="
-          /tmp/gradle-7.6.3/bin/gradle clean assembleRelease --no-daemon --stacktrace 2>&1 || true
+          /tmp/gradle-8.0.2/bin/gradle clean assembleRelease --no-daemon --stacktrace 2>&1 || true
 
       - name: Search for APK
         working-directory: android-app
         run: |
           echo "=== APK files ==="
-          find . -name "*.apk" -type f
-          echo "=== Build dir ==="
-          ls -la app/build/ 2>/dev/null || echo "No build dir"
+          find . -name "*.apk" -type f 2>/dev/null
+          echo "=== Build outputs ==="
           ls -la app/build/outputs/ 2>/dev/null || echo "No outputs dir"
           ls -la app/build/outputs/apk/ 2>/dev/null || echo "No apk dir"
           ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir"
