@@ -27,11 +27,11 @@ jobs:
           api-level: 34
           build-tools: 34.0.0
 
-      - name: Download Gradle 8.0.2
+      - name: Download Gradle 7.6.3 (compatible with AGP 7.4.2)
         run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.0.2-bin.zip -O /tmp/gradle.zip
+          wget -q https://services.gradle.org/distributions/gradle-7.6.3-bin.zip -O /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -C /tmp
-          echo "/tmp/gradle-8.0.2/bin" >> $GITHUB_PATH
+          echo "/tmp/gradle-7.6.3/bin" >> $GITHUB_PATH
 
       - name: Check gradle version
         run: gradle --version
@@ -40,6 +40,7 @@ jobs:
         working-directory: android-app
         continue-on-error: true
         run: |
+          echo "=== Building APK ==="
           gradle clean assembleRelease --no-daemon --stacktrace
 
       - name: Search for APK
