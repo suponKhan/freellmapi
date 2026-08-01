@@ -36,36 +36,25 @@ jobs:
       - name: Check gradle version
         run: gradle --version
 
-      - name: List project files
-        working-directory: android-app
-        run: |
-          echo "=== Root dir ==="
-          ls -la
-          echo "=== app dir ==="
-          ls -la app/
-          echo "=== src/main ==="
-          find app/src -type f 2>/dev/null
-
       - name: Build APK with gradle
         working-directory: android-app
         run: |
+          echo "=== Building APK ==="
           gradle clean assembleRelease --no-daemon --stacktrace 2>&1 || true
-          echo "=== Gradle exit code: $? ==="
+          echo "=== After build ==="
 
       - name: Search for APK
         working-directory: android-app
         run: |
-          echo "=== Searching for APK files ==="
-          find . -name "*.apk" -type f 2>/dev/null | head -20
-          echo "=== Build outputs ==="
+          echo "=== APK files ==="
+          find . -name "*.apk" -type f
+          echo "=== Build dir ==="
+          ls -la app/build/ 2>/dev/null || echo "No build dir"
           ls -la app/build/outputs/ 2>/dev/null || echo "No outputs dir"
           ls -la app/build/outputs/apk/ 2>/dev/null || echo "No apk dir"
           ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir"
-          echo "=== Build dir ==="
-          ls -la app/build/ 2>/dev/null || echo "No build dir"
 
       - name: Upload APK artifact
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: freellm-gateway-apk
@@ -73,4 +62,3 @@ jobs:
             android-app/app/build/outputs/**/*.apk
             android-app/app/build/outputs/apk/**/*.apk
             android-app/app/build/outputs/apk/release/*.apk
-            android-app/**/build/outputs/apk/release/*.apk
