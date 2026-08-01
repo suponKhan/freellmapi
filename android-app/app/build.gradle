@@ -2,12 +2,13 @@ apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 
 android {
-    compileSdkVersion 34
+    namespace "com.example.freellmgateway"
+    compileSdk 34
 
     defaultConfig {
         applicationId "com.example.freellmgateway"
-        minSdkVersion 26
-        targetSdkVersion 34
+        minSdk 26
+        targetSdk 34
         versionCode 1
         versionName "0.1"
     }
