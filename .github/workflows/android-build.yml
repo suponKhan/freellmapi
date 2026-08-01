@@ -33,12 +33,11 @@ jobs:
       - name: Check gradle version
         run: gradle --version
 
-      - name: Build APK with system gradle (clean)
+      - name: Build APK with system gradle
         working-directory: android-app
         run: |
           echo "=== Building APK with system gradle ==="
-          set -e
-          gradle clean assembleRelease --no-daemon --stacktrace --info 2>&1
+          gradle clean assembleRelease --no-daemon --stacktrace 2>&1
           echo "Build exit code: $?"
 
       - name: Search for APK
