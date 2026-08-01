@@ -31,13 +31,13 @@ jobs:
           echo "Download exit code: $?"
           ls -la /tmp/gradle.zip
           unzip -q gradle.zip
-          /tmp/gradle-8.0.2/bin/gradle --version
+          /tmp/gradle-8.0.2/bin/gradle --version 2>&1
 
       - name: Build APK
         working-directory: android-app
         run: |
           echo "=== Building APK ==="
-          /tmp/gradle-8.0.2/bin/gradle clean assembleRelease --no-daemon --stacktrace 2>&1 || true
+          /tmp/gradle-8.0.2/bin/gradle clean assembleRelease --no-daemon --stacktrace 2>&1
 
       - name: Search for APK
         working-directory: android-app
