@@ -31,13 +31,13 @@ jobs:
           api-level: 34
           build-tools: 34.0.0
 
-      - name: Download Gradle and generate wrapper
+      - name: Download Gradle 7.6 and generate wrapper
         run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.0.2-bin.zip -O /tmp/gradle.zip
+          wget -q https://services.gradle.org/distributions/gradle-7.6.3-bin.zip -O /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -d $HOME/gradle
-          export PATH="$HOME/gradle/gradle-8.0.2/bin:$PATH"
+          export PATH="$HOME/gradle/gradle-7.6.3/bin:$PATH"
           cd android-app
-          gradle wrapper --gradle-version 8.0.2 --distribution-type all
+          gradle wrapper --gradle-version 7.6.3 --distribution-type all
           chmod +x gradlew
 
       - name: Build APK with wrapper
