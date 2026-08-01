@@ -31,25 +31,29 @@ jobs:
         with:
           gradle-version: 8.2.1
 
+      - name: Generate debug keystore
+        working-directory: android-app
+        run: |
+          keytool -genkeypair -v -keystore app/debug.keystore \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+
       - name: Build APK
         working-directory: android-app
         run: |
-          set +e
-          {
-            echo "=== Environment ==="
-            echo "JAVA_HOME=$JAVA_HOME"
-            echo "ANDROID_HOME=$ANDROID_HOME"
-            echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-            which gradle
-            gradle --version
-            echo "=== Building APK ==="
-            gradle clean assembleDebug --no-daemon --console=plain --stacktrace
-            BUILD_EXIT=$?
-            echo "BUILD EXIT CODE: $BUILD_EXIT"
-            exit $BUILD_EXIT
-          } 2>&1 | tee build-log.txt
-          echo "=== LOG SIZE ==="
-          wc -c build-log.txt
+          echo "=== Environment ==="
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          which gradle
+          gradle --version
+          echo "=== Building APK ==="
+          set -o pipefail
+          gradle clean assembleRelease --no-daemon --console=plain --stacktrace 2>&1 | tee build-log.txt
+          BUILD_EXIT=${PIPESTATUS[0]}
+          echo "BUILD EXIT CODE: $BUILD_EXIT"
+          exit $BUILD_EXIT
 
       - name: Push build log via git
         if: always()
