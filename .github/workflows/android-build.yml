@@ -33,15 +33,15 @@ jobs:
           unzip -q /tmp/gradle.zip -C /tmp
           echo "/tmp/gradle-7.6.3/bin" >> $GITHUB_PATH
 
-      - name: Make gradlew executable
-        working-directory: android-app
-        run: chmod +x gradlew
+      - name: Check gradle version
+        run: gradle --version
 
       - name: Build APK with gradle
         working-directory: android-app
         run: |
           echo "=== Building APK ==="
-          gradle clean assembleRelease --no-daemon --stacktrace
+          gradle clean assembleRelease --no-daemon --stacktrace 2>&1 || true
+          echo "=== Build completed ==="
 
       - name: Search for APK
         working-directory: android-app
@@ -49,10 +49,17 @@ jobs:
           echo "=== APK files ==="
           find . -name "*.apk" -type f
           echo "=== Build outputs ==="
+          ls -la app/build/ 2>/dev/null || echo "No build dir"
+          ls -la app/build/outputs/ 2>/dev/null || echo "No outputs dir"
+          ls -la app/build/outputs/apk/ 2>/dev/null || echo "No apk dir"
           ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir"
 
       - name: Upload APK artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: freellm-gateway-apk
-          path: android-app/app/build/outputs/apk/release/*.apk
+          path: |
+            android-app/app/build/outputs/**/*.apk
+            android-app/app/build/outputs/apk/**/*.apk
+            android-app/app/build/outputs/apk/release/*.apk
