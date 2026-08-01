@@ -1,10 +1,12 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.freellmgateway">
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
 <uses-permission android:name="android.permission.INTERNET" />
 
 <application
     android:allowBackup="true"
-    android:label="FreeLLM Gateway">
+    android:label="@string/app_name"
+    android:theme="@style/Theme.FreeLLMGateway">
     <activity android:name=".SettingsActivity" android:exported="false" />
     <activity android:name=".MainActivity" android:exported="true">
         <intent-filter>

@@ -23,7 +23,9 @@ import io.ktor.serialization.kotlinx.json.*
 import io.ktor.client.*
 import io.ktor.client.engine.okhttp.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.*
+import io.ktor.http.content.TextContent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -63,7 +65,7 @@ class MainActivity : ComponentActivity() {
 
                             val remoteResponseText: String = client.post(remoteUrl.trimEnd('/') + "/v1/chat/completions") {
                                 contentType(ContentType.Application.Json)
-                                header("Authorization", "Bearer ")
+                                header("Authorization", "Bearer $apiKey")
                                 setBody(TextContent(bodyText, ContentType.Application.Json))
                             }.bodyAsText()
 
@@ -84,7 +86,7 @@ class MainActivity : ComponentActivity() {
                         }
                         try {
                             val remoteResponseText: String = client.get(remoteUrl.trimEnd('/') + "/v1/models") {
-                                header("Authorization", "Bearer ")
+                                header("Authorization", "Bearer $apiKey")
                                 accept(ContentType.Application.Json)
                             }.bodyAsText()
                             call.respondText(remoteResponseText, ContentType.Application.Json)
