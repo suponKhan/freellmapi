@@ -11,6 +11,10 @@ jobs:
       run:
         shell: bash -l {0}
 
+    env:
+      JAVA_HOME: /usr/lib/jvm/temurin-17-jdk
+      GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx2g"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,36 +31,30 @@ jobs:
           api-level: 34
           build-tools: 34.0.0
 
-      - name: Install Gradle
-        run: sudo apt-get update && sudo apt-get install -y gradle
+      - name: Download Gradle and generate wrapper
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.0.2-bin.zip -O /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d $HOME/gradle
+          export PATH="$HOME/gradle/gradle-8.0.2/bin:$PATH"
+          cd android-app
+          gradle wrapper --gradle-version 8.0.2 --distribution-type all
+          chmod +x gradlew
 
-      - name: Check gradle version
-        run: gradle --version
-
-      - name: Build APK with system gradle
+      - name: Build APK with wrapper
         working-directory: android-app
         run: |
-          echo "=== Building APK with system gradle ==="
-          gradle clean assembleRelease --no-daemon --stacktrace 2>&1
-          echo "Build exit code: $?"
+          ./gradlew assembleRelease --no-daemon --stacktrace --info 2>&1
 
       - name: Search for APK
         working-directory: android-app
         run: |
           echo "=== Searching for APK files ==="
-          find . -name "*.apk" -type f 2>/dev/null | head -20
-          echo "=== Build outputs directory ==="
-          ls -la app/build/outputs/ 2>/dev/null || echo "No outputs dir"
-          ls -la app/build/outputs/apk/ 2>/dev/null || echo "No apk dir"
+          find . -name "*.apk" -type f 2>/dev/null
+          echo "=== Build outputs ==="
           ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir"
-          echo "=== All files in build/outputs ==="
-          find app/build/outputs -type f 2>/dev/null | head -30
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: freellm-gateway-apk
-          path: |
-            android-app/app/build/outputs/**/*.apk
-            android-app/app/build/outputs/apk/**/*.apk
-            android-app/app/build/outputs/apk/release/*.apk
+          path: android-app/app/build/outputs/apk/**/*.apk
