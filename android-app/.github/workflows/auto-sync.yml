@@ -1,0 +1,56 @@
+name: auto-sync
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [ upstream-sync ]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/tashfeenahmed/freellmapi.git || true
+
+      - name: Fetch upstream
+        run: |
+          git fetch upstream main
+
+      - name: Check if sync needed
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "up-to-date"
+            echo "needed=false" >> $GITHUB_OUTPUT
+          else
+            echo "sync needed"
+            echo "needed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Merge upstream (keep gateway changes)
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          git merge upstream/main --no-edit -X ours || echo "CONFLICT - keeping gateway branch"
+          git push origin HEAD:android-gateway || echo "Push failed"
+
+      - name: Trigger android build
+        if: steps.check.outputs.needed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createDispatchEvent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              event_type: 'build-triggered',
+              client_payload: { branch: 'android-gateway' }
+            })

@@ -6,15 +6,15 @@ android {
     compileSdk 34
 
     defaultConfig {
-            applicationId "com.example.freellmgateway"
-            minSdk 26
-            targetSdk 34
-            versionCode 1
-            versionName "0.1"
-            ndk {
-                abiFilters "armeabi-v7a", "arm64-v8a"
-            }
+        applicationId "com.example.freellmgateway"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "0.1"
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a"
         }
+    }
 
     signingConfigs {
         release {
@@ -24,6 +24,7 @@ android {
             keyPassword "android"
         }
     }
+
     buildTypes {
         release {
             signingConfig signingConfigs.release
@@ -71,6 +72,6 @@ dependencies {
     implementation "io.ktor:ktor-client-content-negotiation:2.3.4"
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
     implementation 'androidx.security:security-crypto:1.1.0-alpha03'
-        implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
-        implementation 'androidx.lifecycle:lifecycle-service:2.7.0'
-    }
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
+    implementation 'androidx.lifecycle:lifecycle-service:2.7.0'
+}
