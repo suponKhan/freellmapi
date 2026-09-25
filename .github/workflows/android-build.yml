@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
       
@@ -17,14 +19,21 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-
-      - name: Fix gradlew permissions and line endings
+      - name: Debug and Fix gradlew
         working-directory: android-app
         run: |
+          echo "Current directory: $(pwd)"
+          ls -la
+          head -n 5 gradlew
+          file gradlew
           sed -i 's/\r$//' gradlew
           chmod +x gradlew
+          file gradlew
+
+      - name: Create local.properties
+        working-directory: android-app
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
 
       - name: Generate debug keystore
         working-directory: android-app
@@ -34,10 +43,15 @@ jobs:
             -storepass android -keypass android \
             -dname "CN=Android Debug,O=Android,C=US"
 
+      - name: Test executing gradlew directly via bash
+        working-directory: android-app
+        run: |
+          bash ./gradlew --version
+
       - name: Build APK
         working-directory: android-app
         run: |
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          bash ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
