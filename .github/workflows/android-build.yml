@@ -8,8 +8,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
       
@@ -19,13 +17,14 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Verify Android SDK
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Fix gradlew permissions and line endings
+        working-directory: android-app
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls $ANDROID_HOME/ 2>/dev/null || echo "SDK not found"
-          ls $ANDROID_HOME/platform-tools/ 2>/dev/null || echo "No platform-tools"
-          ls $ANDROID_HOME/platforms/ 2>/dev/null || echo "No platforms"
-          ls $ANDROID_HOME/build-tools/ 2>/dev/null || echo "No build-tools"
+          sed -i 's/\r$//' gradlew
+          chmod +x gradlew
 
       - name: Generate debug keystore
         working-directory: android-app
@@ -38,7 +37,6 @@ jobs:
       - name: Build APK
         working-directory: android-app
         run: |
-          chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Upload APK
