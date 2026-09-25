@@ -45,7 +45,7 @@ fi
 WRAPPER_JAR="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
 
 # Resolve logs and install/actual installation path
-APP_HOME=$(cd "${BASH_SOURCE:-$0}" && cd "$(dirname -- "${BASH_SOURCE:-$0}")" && pwd) 2>/dev/null
+APP_HOME=$(cd "$(dirname -- "$0")" && pwd)
 if [ "$APP_HOME" = "." ]; then APP_HOME=$(pwd); fi
 
 # Make this the default maximum for Gradle
