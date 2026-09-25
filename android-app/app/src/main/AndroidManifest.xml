@@ -16,6 +16,11 @@
             android:foregroundServiceType="dataSync"
             android:exported="false" />
 
+        <service
+            android:name=".service.GatewayForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
         <activity android:name=".SettingsActivity" android:exported="false" />
         <activity android:name=".DashboardActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true">

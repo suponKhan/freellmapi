@@ -21,12 +21,12 @@ class GatewayForegroundService : LifecycleService() {
         private const val CHANNEL_ID = "freellm_gateway_channel"
         private const val NOTIF_ID = 4242
 
-        fun start(context: Context, host: String, port: Int, baseUrl: String, apiKey: *** streaming: Boolean) {
+        fun start(context: Context, host: String, port: Int, baseUrl: String, apiKey: String, streaming: Boolean) {
             val intent = Intent(context, GatewayForegroundService::class.java).apply {
                 putExtra("host", host)
                 putExtra("port", port)
                 putExtra("baseUrl", baseUrl)
-                putExtra("apiKey", ***
+                putExtra("apiKey", apiKey)
                 putExtra("streaming", streaming)
             }
             context.startForegroundService(intent)
