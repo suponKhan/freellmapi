@@ -22,6 +22,26 @@ const ATTEMPT_ERROR_SUMMARY_FILENAME = '20260726_000006_attempt_error_summary.ts
 const AGENT_COMPATIBILITY_FILENAME = '20260727_000001_agent_compatibility.ts';
 const TOMBSTONE_PROVENANCE_FILENAME = '20260728_000001_tombstone_provenance.ts';
 const CUSTOM_MODEL_ENDPOINT_IDENTITY_FILENAME = '20260729_000001_custom_model_endpoint_identity.ts';
+const CUSTOM_ENDPOINT_HOST_LABELS_FILENAME = '20260802_000001_custom_endpoint_host_labels.ts';
+const KEY_MODEL_SCOPE_FILENAME = '20260805_000001_key_model_scope.ts';
+const CLIENT_PROFILES_FILENAME = '20260805_000002_client_profiles.ts';
+const API_KEY_PROXY_FILENAME = '20260810_000001_api_key_proxy.ts';
+const PLAYGROUND_CONVERSATIONS_FILENAME = '20260820_000001_playground_conversations.ts';
+const CUSTOM_MODEL_TOMBSTONES_FILENAME = '20260819_000001_custom_model_tombstones.ts';
+const SERVER_LOGS_FILENAME = '20260823_000001_server_logs.ts';
+const BACKUPS_TABLE_FILENAME = '20260823_000002_backups_table.ts';
+const ATTEMPT_KEY_LABEL_FILENAME = '20260823_000003_attempt_key_label.ts';
+const PROFILE_AUTO_INCLUDE_FILENAME = '20260823_000004_profile_auto_include.ts';
+const IDEMPOTENCY_CLAIMS_FILENAME = '20260901_000001_idempotency_claims.ts';
+const QUOTA_OBSERVATION_LOOKUP_FILENAME = '20260901_000002_quota_observation_lookup.ts';
+const REQUEST_CALLER_FILENAME = '20260901_000003_request_caller.ts';
+const ANALYTICS_LATENCY_PERCENTILE_INDEX_FILENAME = '20260902_000001_analytics_latency_percentile_index.ts';
+const MCP_ENABLED_DEFAULT_FILENAME = '20260903_000001_mcp_enabled_default.ts';
+const RESPONSE_CACHE_FILENAME = '20260903_000002_response_cache.ts';
+const KEY_MONTHLY_BUDGET_FILENAME = '20260904_000001_key_monthly_budget.ts';
+const REQUEST_MODEL_ATTRIBUTION_FILENAME = '20260913_000001_request_model_attribution.ts';
+const KEY_MONTHLY_USAGE_FILENAME = '20260914_000001_key_monthly_usage.ts';
+const QUOTA_SNAPSHOT_FRESHNESS_FILENAME = '20260915_000001_quota_snapshot_freshness.ts';
 
 interface SchemaRow {
   type: string;
@@ -90,6 +110,26 @@ describe('migration round trip', () => {
         AGENT_COMPATIBILITY_FILENAME,
         TOMBSTONE_PROVENANCE_FILENAME,
         CUSTOM_MODEL_ENDPOINT_IDENTITY_FILENAME,
+        CUSTOM_ENDPOINT_HOST_LABELS_FILENAME,
+        KEY_MODEL_SCOPE_FILENAME,
+        CLIENT_PROFILES_FILENAME,
+        API_KEY_PROXY_FILENAME,
+        CUSTOM_MODEL_TOMBSTONES_FILENAME,
+        PLAYGROUND_CONVERSATIONS_FILENAME,
+        SERVER_LOGS_FILENAME,
+        BACKUPS_TABLE_FILENAME,
+        ATTEMPT_KEY_LABEL_FILENAME,
+        PROFILE_AUTO_INCLUDE_FILENAME,
+        IDEMPOTENCY_CLAIMS_FILENAME,
+        QUOTA_OBSERVATION_LOOKUP_FILENAME,
+        REQUEST_CALLER_FILENAME,
+        ANALYTICS_LATENCY_PERCENTILE_INDEX_FILENAME,
+        MCP_ENABLED_DEFAULT_FILENAME,
+        RESPONSE_CACHE_FILENAME,
+        KEY_MONTHLY_BUDGET_FILENAME,
+        REQUEST_MODEL_ATTRIBUTION_FILENAME,
+        KEY_MONTHLY_USAGE_FILENAME,
+        QUOTA_SNAPSHOT_FRESHNESS_FILENAME,
       ]);
     } finally {
       db.close();
@@ -110,6 +150,24 @@ describe('migration round trip', () => {
       db.prepare(`
         INSERT INTO models (platform, model_id, display_name, intelligence_rank, speed_rank, supports_tools, supports_vision, enabled, source)
         VALUES ('custom', 'roundtrip-custom', 'Roundtrip Custom', 50, 50, 1, 0, 1, 'user')
+      `).run();
+
+      // Same reasoning for the endpoint-label rename (#704): it only touches
+      // custom api_keys rows, so seed one in its post-migration state (labelled
+      // with its host) for the down (host -> 'Custom') and up to exercise.
+      db.prepare(`
+        INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, base_url)
+        VALUES ('custom', '127.0.0.1:11434', 'x', 'x', 'x', 'http://127.0.0.1:11434/v1')
+      `).run();
+
+      // Same again for the /mcp lifecycle seed (#925): it reads api_keys, and
+      // with the key above present its post-migration state is enabled ('1').
+      // The first up ran against an empty api_keys and wrote '0', so pin the
+      // post-seed value here for down (row removed) and up (row rewritten) to
+      // round trip.
+      db.prepare(`
+        INSERT INTO settings (key, value) VALUES ('enable_mcp', '1')
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
       `).run();
 
       const fullState = snapshotAppState(db);

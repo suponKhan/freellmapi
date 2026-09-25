@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GoogleProvider } from '../../providers/google.js';
+import { isStreamTruncatedError } from '../../lib/error-classify.js';
 
 describe('GoogleProvider', () => {
   let provider: GoogleProvider;
@@ -579,6 +580,51 @@ describe('GoogleProvider', () => {
     expect(assistantEntry.parts[0].functionCall.id).toBe('toolu_rewritten_by_bridge');
   });
 
+  it('falls back to Google\'s documented dummy sentinel when no signature exists', async () => {
+    // Signature-less replay — history this proxy never produced (another
+    // provider, a restart, TTL expiry). Gemini 3 400s on a MISSING signature
+    // and only accepts its two documented sentinel strings as a substitute;
+    // a fabricated value (e.g. a hash) is not one of them.
+    let capturedBody: any;
+    vi.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+      capturedBody = JSON.parse((init as any).body);
+      return {
+        ok: true,
+        json: () => Promise.resolve({
+          candidates: [{
+            content: { parts: [{ text: 'ok' }] },
+            finishReason: 'STOP',
+          }],
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+        }),
+      } as any;
+    });
+
+    await provider.chatCompletion(
+      'test-key',
+      [
+        { role: 'user', content: 'Weather in Nairobi?' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{
+            id: 'call_sentinel_fallback',
+            type: 'function',
+            // Unique name/args: nothing in the module-level signature cache
+            // can match, so the fallback path is exercised for real.
+            function: { name: 'get_weather_sentinel', arguments: '{"city":"Nairobi"}' },
+          }],
+        },
+        { role: 'tool', tool_call_id: 'call_sentinel_fallback', content: '{"temp": 21}' },
+      ],
+      'gemini-3-pro-preview',
+    );
+
+    const assistantEntry = capturedBody.contents.find((c: any) => c.role === 'model');
+    expect(assistantEntry.parts[0].thoughtSignature).toBe('context_engineering_is_the_way_to_go');
+    expect(assistantEntry.parts[0].functionCall.name).toBe('get_weather_sentinel');
+  });
+
   // ── Streaming ──────────────────────────────────────────────────────────────
   // Build a Response-shaped object backed by a ReadableStream so the provider's
   // `res.body.getReader()` path executes for real (Node 20+ has both globally).
@@ -615,6 +661,40 @@ describe('GoogleProvider', () => {
     const text = chunks.map(c => c.choices[0].delta.content ?? '').join('');
     expect(text).toBe('Hello');
     expect(chunks[chunks.length - 1].choices[0].finish_reason).toBe('stop');
+  });
+
+  // An abrupt EOF — no `[DONE]`, no `finishReason` — is a truncated generation,
+  // not a completion (providers/base.ts:392-397). This adapter used to
+  // synthesize `finish_reason: 'stop'` for it, so the client was told a
+  // half-written answer was complete, the request was logged 'success', and the
+  // route was never benched. Throwing the shared message hands it to
+  // isStreamTruncatedError and the fallback loop's truncation-streak bench.
+  it('throws on an abrupt EOF instead of synthesizing a stop chunk', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce(sseResponse([
+      'data: {"candidates":[{"content":{"parts":[{"text":"Hel"}]}}]}\n\n',
+      'data: {"candidates":[{"content":{"parts":[{"text":"lo, this answer is cut"}]}}]}\n\n',
+      // body ends here: no [DONE], no finishReason
+    ]));
+
+    const chunks: any[] = [];
+    let thrown: any;
+    try {
+      for await (const c of provider.streamChatCompletion(
+        'test-key',
+        [{ role: 'user', content: 'Hi' }],
+        'gemini-2.5-pro',
+      )) chunks.push(c);
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    // The classifier the fallback loop consults must recognize it.
+    expect(isStreamTruncatedError(thrown)).toBe(true);
+    // The content already streamed is still delivered; what must NOT appear is
+    // a terminal chunk claiming the truncated answer finished normally.
+    expect(chunks.map(c => c.choices[0].delta.content ?? '').join('')).toBe('Hello, this answer is cut');
+    expect(chunks.some(c => c.choices[0].finish_reason)).toBe(false);
   });
 
   it('streams Gemini thought parts as reasoning_content, not visible content (#539)', async () => {

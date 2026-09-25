@@ -44,6 +44,19 @@ import { cn } from '@/lib/utils'
 //   cursor    Cursor       cursor.com/brand asset pack, `Cube/SVG/CUBE_2D_{LIGHT,DARK}.svg` Cursor TM, nominative use
 //   crush     Crush        no vector published; hue sampled from the official               Charm TM, nominative use
 //                          stuff.charm.sh/crush/charm-crush.png (Charm's `charple`)
+//   dsh       DeepSeek     lettermark only: DSH's brand guidelines ask third parties not    DeepSeek TM, nominative use
+//             Harness      to reuse official artwork; tinted with DeepSeek's brand blue
+//   mimo      MiMo Code    lettermark only: no vector published, only the 32px favicon      Xiaomi TM, nominative use
+//                          at cdn.cnbj1.fds.api.mi-img.com/.../mimo.ico, which is flat black
+//   atomcode  AtomCode     lettermark only: no vector published; hue sampled from the        AtomGit TM, nominative use
+//                          app icon cdn-news.gitcode.com/news/atomcode-icon1.png (the
+//                          gradient's dominant blue, at two of its four corners)
+//   openclaw  OpenClaw     openclaw.ai/favicon.svg (the lobster mark: body, claws and         MIT (openclaw/openclaw)
+//                          antennae); the eyes are dropped with the gradient, as every
+//                          mark here is painted flat in one brand colour
+//   hermes    Hermes Agent lettermark only: the published mark (NousResearch/hermes-agent   Nous Research TM, nominative use
+//                          website/static/img/logo.png) is a raster portrait and the SVG
+//                          favicon is a text glyph, so neither fits the 24px grid
 //
 //   id        light tile        ratio  dark tile         ratio  dark-mode treatment
 //   claude    #D37152            3.08  #D97757            5.52  brand #D97757 on dark; light tile is
@@ -70,6 +83,16 @@ import { cn } from '@/lib/utils'
 //                                                               saturated yellow that clears 3:1 there
 //   cursor    #26251E           14.10  #EDECEC           14.61  published pair (CUBE_2D_LIGHT/DARK)
 //   crush     #6B50FF            4.57  #6B50FF            3.46  brand purple unchanged; clears on both tiles
+//   dsh       #4D6BFE            3.97  #4D6BFE            3.98  brand blue unchanged; clears on both tiles
+//   mimo      #000000           19.26  #FFFFFF           17.22  published pair (the favicon is black artwork on
+//                                                               transparent, so it inverts on the dark tile)
+//   atomcode  #3C82F6            3.37  #3C82F6            4.69  icon blue unchanged; clears on both tiles
+//   openclaw  #991B1B            7.62  #FF4D4D            5.27  published pair: the mark is a gradient from
+//                                                               #FF4D4D to #991B1B, and each tile takes the
+//                                                               stop that clears on it (the light stop is
+//                                                               3.00 on the light tile, right at the line)
+//   hermes    #000000           19.26  #FFFFFF           17.22  published pair (the logo is flat black artwork
+//                                                               on white, so it inverts on the dark tile)
 //   generic   currentColor         —   currentColor         —   not a brand mark
 //
 // Cursor also publishes a 2.5D cube in five warm greys (#43413c #55544f #72716d
@@ -204,6 +227,47 @@ const brands: Record<string, Brand> = {
   // Charm's own purple so the tile still carries the brand.
   crush: {
     tint: '[--mk:#6B50FF] dark:[--mk:#6B50FF]',
+  },
+  // DeepSeek Harness asks third parties not to reuse its official artwork
+  // (BRAND_GUIDELINES.md), so the lettermark stands in, in DeepSeek's blue.
+  dsh: {
+    tint: '[--mk:#4D6BFE] dark:[--mk:#4D6BFE]',
+  },
+  // Xiaomi publishes no vector mark for MiMo Code — the only artwork on
+  // mimo.xiaomi.com is the 32px favicon — so the lettermark stands in. That
+  // favicon is drawn in flat black on transparent, which is the published
+  // pair treatment: black on the light tile, white on the dark one.
+  mimo: {
+    tint: '[--mk:#000000] dark:[--mk:#FFFFFF]',
+  },
+  // AtomGit publishes AtomCode's icon only as a raster (the app icon the site
+  // header uses: an atom orbit on a cyan-to-violet gradient), so the lettermark
+  // stands in. It is tinted with the gradient's dominant blue, sampled from
+  // that PNG, which clears 3:1 on both tiles as published.
+  atomcode: {
+    tint: '[--mk:#3C82F6] dark:[--mk:#3C82F6]',
+  },
+  // openclaw.ai/favicon.svg, drawn on a 120-unit box: the body and the two
+  // claws are filled paths, the antennae stroked. Scaled 0.2 and centred onto
+  // the 24 grid. The published mark paints the shell in a red gradient with
+  // dark eyes; here the shell is one flat brand red, like every other mark.
+  openclaw: {
+    tint: '[--mk:#991B1B] dark:[--mk:#FF4D4D]',
+    art: (
+      <g transform="translate(0 0) scale(0.2)">
+        <path d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z" />
+        <path d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z" />
+        <path d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z" />
+        <path d="M45 15 Q35 5 30 8" fill="none" stroke="var(--mk, currentColor)" strokeWidth={3} strokeLinecap="round" />
+        <path d="M75 15 Q85 5 90 8" fill="none" stroke="var(--mk, currentColor)" strokeWidth={3} strokeLinecap="round" />
+      </g>
+    ),
+  },
+  // Nous Research publishes the Hermes Agent mark only as a raster portrait,
+  // so the lettermark stands in. The artwork is flat black on white, which is
+  // the published pair treatment: black on the light tile, white on the dark.
+  hermes: {
+    tint: '[--mk:#000000] dark:[--mk:#FFFFFF]',
   },
   // Any other OpenAI-compatible client: our own terminal glyph, not a brand
   // mark, so it keeps the page foreground colour on both tiles.

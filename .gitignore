@@ -13,7 +13,11 @@ server/data/
 .encryption-key
 .env
 .env.local
+/tunnel-client.yaml
 .DS_Store
+
+# TypeScript incremental build cache
+*.tsbuildinfo
 
 # Personal deployment scripts (contain keys/credentials — kept local)
 deploy-pi.sh

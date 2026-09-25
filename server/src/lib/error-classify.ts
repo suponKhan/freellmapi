@@ -96,7 +96,114 @@ export function isRetryableError(err: any): boolean {
     // First-byte timeout (#584): the grace budget expired before ANY byte
     // reached the client, so the next candidate can serve it invisibly.
     || msg.includes('no first byte')
-    || msg.includes('unparseable inline tool-call dialect');
+    || msg.includes('unparseable inline tool-call dialect')
+    // The model emitted a tool call whose arguments violate the schema the
+    // caller declared (opt-in check, lib/tool-validate.ts). Thrown before any
+    // byte reached the client, and a different model usually gets the same
+    // call right — the thrower marks the model skipped for this request, since
+    // a sibling key would misbehave identically.
+    || msg.includes('invalid tool arguments')
+    // A transport failure undici buried in `err.cause` rather than the
+    // top-level message (see isTransportError). Purely additive: every rule
+    // above is unchanged, and this is a second, structured signal for the
+    // errors whose real cause never reaches the text we match on.
+    || isTransportError(err);
+}
+
+// ── Transport failures hidden in the cause chain (undici) ────────────────────
+// Every rule in isRetryableError above reads the TOP-LEVEL message, and undici
+// does not always put the real failure there. The INITIAL-CONNECT case is
+// covered by luck: undici words a connection that never opened "fetch failed",
+// and the allowlist matches that string. A socket that dies MID-request does
+// not get the same treatment — it surfaces as a generic wrapper (a bare
+// `TypeError: terminated`, or an adapter's own re-throw) whose `.cause` carries
+// the actual ECONNRESET / EPIPE / "socket hang up" / "premature close" /
+// "other side closed" error, sometimes nested a link or two deeper still.
+// Those fell through every rule and classified FATAL: the client got a 502
+// while the healthy paid routes queued behind the dead one were never tried.
+//
+// Everything matched here is a transient network fault that says nothing about
+// the request or the model, so the next candidate in the chain can serve it.
+// The walk is bounded and cycle-safe: `cause` is attacker-adjacent data (it can
+// come from a provider's own error object) and a self-referential chain on this
+// hot path would hang the request, not just slow it.
+const TRANSPORT_CAUSE_MAX_DEPTH = 5;
+
+const TRANSPORT_ERROR_CODES = new Set([
+  // Node socket-level codes. A dead/refused/unreachable host is transient from
+  // the chain's point of view either way: the next candidate is a DIFFERENT
+  // host, so even a permanently bad one here is worth failing over rather than
+  // 502-ing the caller.
+  'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'EPIPE', 'ETIMEDOUT',
+  'EAI_AGAIN', 'ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH', 'EADDRNOTAVAIL',
+]);
+
+// undici stamps its own transport failures with a `UND_ERR_*` code
+// (UND_ERR_SOCKET, UND_ERR_CONNECT_TIMEOUT, UND_ERR_HEADERS_TIMEOUT,
+// UND_ERR_BODY_TIMEOUT, …). Matched by PREFIX rather than enumerated: the list
+// grows with undici releases, and every member of it is a transport condition.
+const UNDICI_ERROR_CODE_PREFIX = 'UND_ERR_';
+
+const TRANSPORT_MESSAGE_HINTS = [
+  'socket hang up',
+  'premature close',
+  'other side closed',
+  // A socket dropped before the TLS handshake finished — undici's full wording
+  // is "Client network socket disconnected before secure TLS connection was
+  // established". The peer closed the TCP connection mid-handshake; transient.
+  'client network socket disconnected',
+  // The same codes as above, for the links that carry them in text only (an
+  // error stringified across a boundary keeps the code in its message but
+  // loses the `code` property).
+  'econnreset', 'econnrefused', 'epipe', 'etimedout', 'eai_again',
+];
+
+/** Walk an error's `cause` chain, yielding each link's `code` and `message`.
+ * Includes the error itself as the first link. Bounded to
+ * TRANSPORT_CAUSE_MAX_DEPTH hops and cycle-safe. */
+function errorChainLinks(err: unknown): Array<{ code: string; message: string }> {
+  const links: Array<{ code: string; message: string }> = [];
+  const seen = new Set<unknown>();
+  let cur: any = err;
+  for (let depth = 0; cur != null && depth <= TRANSPORT_CAUSE_MAX_DEPTH; depth++) {
+    if (typeof cur !== 'object' && typeof cur !== 'function') break;
+    if (seen.has(cur)) break;
+    seen.add(cur);
+    links.push({
+      code: typeof cur.code === 'string' ? cur.code : '',
+      message: typeof cur.message === 'string' ? cur.message : '',
+    });
+    cur = cur.cause;
+  }
+  return links;
+}
+
+/** True when the error — or anything in its bounded cause chain — is a
+ * transient network transport failure: a reset, dropped, refused or timed-out
+ * socket, a failed TLS handshake, or an undici transport code. */
+export function isTransportError(err: any): boolean {
+  if (err == null) return false;
+  // A client hang-up and the fallback time-budget hedge BOTH reach undici as an
+  // aborted socket, and undici labels that abort UND_ERR_ABORTED — the very
+  // same code a genuine mid-flight socket death carries. Neither is provider
+  // health, so classifying either retryable would resurrect exactly what the
+  // two marked abort errors exist to prevent (no cooldown, no health penalty,
+  // no failure stats for a request the GATEWAY canceled). The structured
+  // markers are authoritative and win over any transport evidence below.
+  if (isClientAbortError(err) || isHedgeAbortError(err)) return false;
+  for (const { code, message } of errorChainLinks(err)) {
+    if (code && (TRANSPORT_ERROR_CODES.has(code) || code.startsWith(UNDICI_ERROR_CODE_PREFIX))) return true;
+    const msg = message.toLowerCase();
+    if (!msg) continue;
+    if (TRANSPORT_MESSAGE_HINTS.some(hint => msg.includes(hint))) return true;
+    // undici's wording for a response body whose socket died mid-read is the
+    // bare word "terminated". Matched as the WHOLE message and never as a
+    // substring: "your account has been terminated" is a fatal billing/auth
+    // condition, and retrying that around the entire chain would burn every
+    // candidate on a request that can never succeed.
+    if (msg.trim() === 'terminated') return true;
+  }
+  return false;
 }
 
 // A genuine provider QUOTA signal: a structured 429 or rate-limit/quota wording.
@@ -167,6 +274,28 @@ export function isClientAbortError(err: any): boolean {
   if (err?.cause && (err.cause as { clientAbort?: boolean }).clientAbort === true) return true;
   const msg = (err?.message ?? '').toLowerCase();
   return msg.includes('client disconnected');
+}
+
+// ── Fallback time-budget hedging (fallback-v2) ──────────────────────────────
+// When the wall-clock retry budget expires MID-FLIGHT (the current attempt is
+// still waiting on a stalled upstream), the fallback loop aborts the composed
+// fetch signal with this marked error. Same rationale as the client abort: it
+// is NOT a provider-health signal, so it must never bench/cooldown/penalize
+// the model+key, and enrichAbort must pass it through untouched. The loop
+// catches it, renders timedOut exhaustion (the budget is spent — nothing left
+// to try), and stops without failure bookkeeping.
+export function newHedgeAbortError(): Error {
+  const err = new Error('fallback time budget expired — upstream request canceled');
+  (err as Error & { hedgeAbort?: boolean }).hedgeAbort = true;
+  return err;
+}
+
+/** True when an error is (or wraps) the time-budget hedge abort above. */
+export function isHedgeAbortError(err: any): boolean {
+  if (err?.hedgeAbort === true) return true;
+  if (err?.cause && (err.cause as { hedgeAbort?: boolean }).hedgeAbort === true) return true;
+  const msg = (err?.message ?? '').toLowerCase();
+  return msg.includes('fallback time budget expired');
 }
 
 /** True for any fetch-abort rejection surfacing out of a body read — the
@@ -240,6 +369,61 @@ export function isProviderDegradedError(err: any): boolean {
   return msg.includes('degraded');
 }
 
+// #788: provider-level failures — 5xx, timeouts, transport/network errors, a
+// degraded deployment — are symptoms of the PROVIDER being sick, not of this
+// particular key. Retrying the same provider with a sibling key would fail
+// identically, so the fallback loop must skip the WHOLE platform for the
+// request instead of burning one failover hop per key. Key-scoped failures
+// (auth, quota, 403 tier) stay out of here so a dead key can still rotate to
+// a healthy sibling on the same platform.
+//
+// Classified on the STRUCTURED status — every adapter attaches one to an HTTP
+// failure (providerHttpError in providers/base.ts) — plus the two families that
+// carry no status at all: a timeout and a transport-level failure. Deliberately
+// NO bare '500' / '503' / 'unavailable' / 'internal server error' substrings: a
+// token count, a duration ("… took 5003ms") or a key-scoped message naming an
+// unavailable model would each condemn a healthy platform for the whole request.
+// A message check therefore only runs when there is no status to trust.
+export function isProviderLevelError(err: any): boolean {
+  // A failure the thrower explicitly scoped to the MODEL (`skipModelForRequest`
+  // — an ignored response_format, invalid tool arguments) is never provider
+  // health, and its message quotes caller- and model-supplied text: a tool
+  // named `set_timeout`, or an Ajv complaint about an instance path `/timeout`,
+  // would otherwise trip the substring checks below and condemn a healthy
+  // platform for the whole request. The structured marker is authoritative;
+  // the text is not.
+  if (err?.skipModelForRequest === true) return false;
+  const status = typeof err?.status === 'number' ? err.status : 0;
+  if (status >= 500) return true;
+  // A DEGRADED hosted deployment (NVIDIA NIM, #522) is provider health wearing
+  // a 400 — same source of truth as everywhere else, not a second substring.
+  if (isProviderDegradedError(err)) return true;
+  if (status !== 0) return false;
+  const msg = (err?.message ?? '').toLowerCase();
+  return isTimeoutErrorText(msg)
+    || msg.includes('econnrefused') || msg.includes('econnreset')
+    || msg.includes('fetch failed');   // undici transport error (DNS/TLS/proxy down)
+}
+
+// #809: kilo's free relay occasionally answers with a bare classification
+// word ("safe" / "unsafe") instead of a real reply — an upstream content
+// filter, not the requested model. Such a turn is a dead turn: treat it like
+// an empty completion so the fallback loop fails over to the next provider
+// instead of surfacing "safe"/"unsafe" as the answer.
+//
+// Scoped to the relay that actually does this. "safe"/"unsafe" is a LEGITIMATE
+// one-word answer for moderation and guard-model workloads, so applying the
+// rule everywhere would throw away correct responses and burn the whole
+// fallback chain for anyone doing classification. Only platforms observed
+// injecting a filter verdict in place of the model's reply belong here.
+const CLASSIFICATION_RELAY_PLATFORMS = new Set(['kilo']);
+
+export function isUpstreamClassificationOutput(text: unknown, platform?: string): boolean {
+  if (!platform || !CLASSIFICATION_RELAY_PLATFORMS.has(platform.toLowerCase())) return false;
+  const t = (typeof text === 'string' ? text : '').trim().toLowerCase();
+  return t === 'safe' || t === 'unsafe';
+}
+
 // Provider-side 400s are retryable because another provider may accept the same
 // request shape. If every routed provider rejects it, however, the client should
 // see an invalid-request error rather than a misleading rate-limit exhaustion.
@@ -291,18 +475,43 @@ export function isContextTooLargeError(err: any): boolean {
     || msg.includes('request entity too large')
     || msg.includes('request body too large')
     || msg.includes('content too large')
+    // Zhipu AI (bigmodel.cn) 400, error code 1261: "Prompt exceeds max length"
+    // (#873). Its wording matches none of the markers above, so without this it
+    // was mis-bucketed as provider_bad_request instead of context_too_large.
+    || msg.includes('exceeds max length')
     || msg.includes('api error 413');
 }
 
 // A 402 Payment Required / out-of-credits error. Distinct from a transient 429:
 // it won't recover on the next window, so the caller benches the model+key with
 // PAYMENT_REQUIRED_COOLDOWN_MS (a full day) rather than the 90s transient cooldown.
+//
+// The digits 402 only count as the STATUS. A bare `includes('402')` also
+// matched token counts and request ids ("Limit 30000, Requested 34026",
+// "14023 tokens used"), and since the 402 bench covers the key on every model
+// of the platform for a day (#1239), one unlucky number took a whole provider
+// out. So: an error that states another status is never a 402 by its digits,
+// and otherwise 402 has to stand alone rather than sit inside a longer number.
+const STATED_STATUS = /\bapi error (\d{3})\b|\(http (\d{3})\)/;
+const STANDALONE_402 = /(?<![\w.])402(?![\w.])/;
+
 export function isPaymentRequiredError(err: any): boolean {
-  const msg = (err.message ?? '').toLowerCase();
-  return msg.includes('402') || msg.includes('payment required')
+  const msg = String(err?.message ?? '').toLowerCase();
+  if (msg.includes('payment required')
     || msg.includes('insufficient_quota') || msg.includes('insufficient credit')
-    || msg.includes('insufficient balance');
+    || msg.includes('insufficient balance')) return true;
+
+  const stated = msg.match(STATED_STATUS);
+  const status = typeof err?.status === 'number' ? err.status : Number(stated?.[1] ?? stated?.[2]);
+  if (Number.isFinite(status)) return status === 402;
+  return STANDALONE_402.test(msg);
 }
+
+// "model 'x' does not exist" / "model \"x\" does not exist" / "model x does not
+// exist" — one non-space token (optionally quoted) between the word "model" and
+// the verdict. Bounded so an unrelated sentence containing both words never
+// matches; the model id itself is never inspected.
+const MODEL_ID_DOES_NOT_EXIST = /\bmodel\b\s+['"`]?[^\s'"`]{1,200}['"`]?\s+(?:does\s+not|doesn't)\s+exist\b/;
 
 // A 404 "model removed/deprecated upstream" error. It's a MODEL-level failure,
 // not a key-level one: every key for the platform will 404 the same way, so the
@@ -317,7 +526,48 @@ export function isModelNotFoundError(err: any): boolean {
   if (err?.status === 404 || err?.status === 410) return true;
   const msg = (err?.message ?? '').toLowerCase();
   return msg.includes('404') || msg.includes('not found') || msg.includes('no endpoints found')
-    || msg.includes('410') || msg.includes('gone');
+    || msg.includes('410') || msg.includes('gone')
+    // Some aggregators report a removed/stale model with a 400 (not a 404) whose
+    // body reads "No model found: <id>", "model not found", "unknown model" or
+    // "model does not exist" (#: Routeway 400 "No model found: llama-3.3-70b-instruct:free").
+    // Note "No model found" does NOT contain the substring "not found" (words are
+    // no/model/found), so it slipped past the checks above and fell through to
+    // isProviderBadRequestError — surfacing as a request-blaming 400 instead of a
+    // stale-catalog 404. These phrasings are MODEL-level (every sibling key fails
+    // identically), so they belong here for the whole-model skip.
+    || msg.includes('no model found') || msg.includes('model not found')
+    || msg.includes('unknown model') || msg.includes('model does not exist')
+    || msg.includes('no such model')
+    // The same verdict with the model id quoted in the middle (#1239: NavyAI
+    // 400 "The model 'o3-mini' does not exist or is not supported for chat
+    // completions."). The bare "model does not exist" substring above never
+    // matches that wording, so every one of a platform's stale rows was booked
+    // as provider_bad_request — no whole-model skip, a hop burned per dead
+    // model, and the exhaustion body blamed the caller's request.
+    || MODEL_ID_DOES_NOT_EXIST.test(msg)
+    // "not supported for chat completions" is MODEL-level too: the id is real
+    // but this platform cannot serve it on the endpoint we use, and a sibling
+    // key would be told the same. Route it out for the request like a 404.
+    || msg.includes('not supported for chat completions');
+}
+
+
+// A 403 that suspends the ACCOUNT, not one model: NavyAI answers every model
+// behind a benched free key with "The Free plan is temporarily disabled due to
+// abuse. You can purchase a plan ...". Every model of the platform fails the
+// same way, so classifying it as model-forbidden benched ONE model per attempt:
+// with 93 catalog rows on that platform, each request burned its whole failover
+// budget re-discovering the same dead account. Not key-auth either: the
+// credential itself is valid, the plan behind it is not, and validateKey's
+// /models probe still passes, so the health checker never demotes the key.
+// Status-gated to 403 (or a status-less message that names one) so provider
+// wording alone can never condemn a healthy key.
+export function isAccountSuspendedError(err: any): boolean {
+  const status = typeof err?.status === 'number' ? err.status : 0;
+  const msg = (err?.message ?? '').toLowerCase();
+  if (status !== 403 && !(status === 0 && msg.includes('403'))) return false;
+  return /\b(plan|account|subscription) (is|has been|was) (temporarily )?(disabled|suspended|banned|deactivated)\b/.test(msg)
+    || msg.includes('due to abuse');
 }
 
 // A 403 Forbidden returned for a specific model behind an otherwise-valid key.
@@ -407,7 +657,38 @@ export function modelRetirementSignal(err: any): ModelRetirementConfidence | nul
   const msg = (err?.message ?? '').toLowerCase();
   const status = typeof err?.status === 'number' ? err.status : 0;
   const gone = status === 410 || /\berror 410\b/.test(msg) || /\b410 gone\b/.test(msg);
-  if (gone || END_OF_LIFE_PHRASES.some(phrase => msg.includes(phrase))) return 'definitive';
+  // An end-of-life phrase is only definitive when the status agrees the model
+  // is not there. On its own it is just text, and 'definitive' skips the
+  // corroboration gate in noteModelRetirementSignal — so a 429 or 500 whose
+  // body happens to mention a retirement (an advisory notice, a status-page
+  // quote, a message about a DIFFERENT model) disabled a live model on one
+  // response. Unmatched here means it falls through and teaches nothing.
+  if (gone || (isModelNotFoundError(err) && END_OF_LIFE_PHRASES.some(phrase => msg.includes(phrase)))) return 'definitive';
   if (!isModelNotFoundError(err)) return null;
   return MODEL_GONE_PHRASES.some(phrase => msg.includes(phrase)) ? 'probable' : null;
+}
+
+// A stream that ended without its terminal marker (`[DONE]` and/or a
+// finish_reason): the upstream connection was reset or the response truncated
+// mid-generation. Observed live on Kilo Gateway (5 attempts in one session,
+// #1218): the gateway answers 200, streams content, then dies without
+// `data: [DONE]` — `readSseStream` throws
+// "…stream ended unexpectedly (no [DONE], no finish_reason)".
+//
+// The truncation is UPSTREAM transport, not request shape, so the plain
+// retryable path (a fresh attempt on a sibling key, or even the same key
+// later) is the right response — but a stream that dies with zero content
+// deltas is usually the ROUTE (platform+model+key edge) that is sick, not
+// bad luck: three empty-ended truncations in a row on the same route
+// reliably precede another one. Callers use this signal to bench the route
+// after a short streak instead of re-paying the round trip every request.
+export function isStreamTruncatedError(err: any): boolean {
+  const msg = (err?.message ?? '').toLowerCase();
+  return msg.includes('stream ended unexpectedly')
+    || msg.includes('no [done], no finish_reason')
+    // undici surfaces an abrupt RST as "terminated" on the body read; with
+    // our SSE reader the top-level message is "terminated" and the real
+    // cause is buried in err.cause (see isTransportError). Count it too:
+    // a terminated mid-stream body is the same dead route either way.
+    || msg === 'terminated';
 }

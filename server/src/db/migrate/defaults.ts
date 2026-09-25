@@ -17,6 +17,26 @@ import * as attemptErrorSummary from '../migrations/20260726_000006_attempt_erro
 import * as agentCompatibility from '../migrations/20260727_000001_agent_compatibility.js';
 import * as tombstoneProvenance from '../migrations/20260728_000001_tombstone_provenance.js';
 import * as customModelEndpointIdentity from '../migrations/20260729_000001_custom_model_endpoint_identity.js';
+import * as customEndpointHostLabels from '../migrations/20260802_000001_custom_endpoint_host_labels.js';
+import * as keyModelScope from '../migrations/20260805_000001_key_model_scope.js';
+import * as clientProfiles from '../migrations/20260805_000002_client_profiles.js';
+import * as apiKeyProxy from '../migrations/20260810_000001_api_key_proxy.js';
+import * as playgroundConversations from '../migrations/20260820_000001_playground_conversations.js';
+import * as customModelTombstones from '../migrations/20260819_000001_custom_model_tombstones.js';
+import * as serverLogs from '../migrations/20260823_000001_server_logs.js';
+import * as backupsTable from '../migrations/20260823_000002_backups_table.js';
+import * as attemptKeyLabel from '../migrations/20260823_000003_attempt_key_label.js';
+import * as profileAutoInclude from '../migrations/20260823_000004_profile_auto_include.js';
+import * as idempotencyClaims from '../migrations/20260901_000001_idempotency_claims.js';
+import * as requestCaller from '../migrations/20260901_000003_request_caller.js';
+import * as quotaObservationLookup from '../migrations/20260901_000002_quota_observation_lookup.js';
+import * as analyticsLatencyPercentileIndex from '../migrations/20260902_000001_analytics_latency_percentile_index.js';
+import * as mcpEnabledDefault from '../migrations/20260903_000001_mcp_enabled_default.js';
+import * as responseCache from '../migrations/20260903_000002_response_cache.js';
+import * as keyMonthlyBudget from '../migrations/20260904_000001_key_monthly_budget.js';
+import * as keyMonthlyUsage from '../migrations/20260914_000001_key_monthly_usage.js';
+import * as quotaSnapshotFreshness from '../migrations/20260915_000001_quota_snapshot_freshness.js';
+import * as requestModelAttribution from '../migrations/20260913_000001_request_model_attribution.js';
 
 export interface MigrationModule {
   up(db: Db): void;
@@ -46,6 +66,26 @@ export const ATTEMPT_ERROR_SUMMARY_FILENAME = '20260726_000006_attempt_error_sum
 export const AGENT_COMPATIBILITY_FILENAME = '20260727_000001_agent_compatibility.ts';
 export const TOMBSTONE_PROVENANCE_FILENAME = '20260728_000001_tombstone_provenance.ts';
 export const CUSTOM_MODEL_ENDPOINT_IDENTITY_FILENAME = '20260729_000001_custom_model_endpoint_identity.ts';
+export const CUSTOM_ENDPOINT_HOST_LABELS_FILENAME = '20260802_000001_custom_endpoint_host_labels.ts';
+export const KEY_MODEL_SCOPE_FILENAME = '20260805_000001_key_model_scope.ts';
+export const CLIENT_PROFILES_FILENAME = '20260805_000002_client_profiles.ts';
+export const API_KEY_PROXY_FILENAME = '20260810_000001_api_key_proxy.ts';
+export const PLAYGROUND_CONVERSATIONS_FILENAME = '20260820_000001_playground_conversations.ts';
+export const CUSTOM_MODEL_TOMBSTONES_FILENAME = '20260819_000001_custom_model_tombstones.ts';
+export const SERVER_LOGS_FILENAME = '20260823_000001_server_logs.ts';
+export const BACKUPS_TABLE_FILENAME = '20260823_000002_backups_table.ts';
+export const ATTEMPT_KEY_LABEL_FILENAME = '20260823_000003_attempt_key_label.ts';
+export const PROFILE_AUTO_INCLUDE_FILENAME = '20260823_000004_profile_auto_include.ts';
+export const IDEMPOTENCY_CLAIMS_FILENAME = '20260901_000001_idempotency_claims.ts';
+export const QUOTA_OBSERVATION_LOOKUP_FILENAME = '20260901_000002_quota_observation_lookup.ts';
+export const REQUEST_CALLER_FILENAME = '20260901_000003_request_caller.ts';
+export const ANALYTICS_LATENCY_PERCENTILE_INDEX_FILENAME = '20260902_000001_analytics_latency_percentile_index.ts';
+export const MCP_ENABLED_DEFAULT_FILENAME = '20260903_000001_mcp_enabled_default.ts';
+export const RESPONSE_CACHE_FILENAME = '20260903_000002_response_cache.ts';
+export const KEY_MONTHLY_BUDGET_FILENAME = '20260904_000001_key_monthly_budget.ts';
+export const REQUEST_MODEL_ATTRIBUTION_FILENAME = '20260913_000001_request_model_attribution.ts';
+export const KEY_MONTHLY_USAGE_FILENAME = '20260914_000001_key_monthly_usage.ts';
+export const QUOTA_SNAPSHOT_FRESHNESS_FILENAME = '20260915_000001_quota_snapshot_freshness.ts';
 
 export const DEFAULT_MIGRATIONS: readonly DefaultMigration[] = [
   { filename: LEGACY_BASELINE_FILENAME, module: legacyBaseline },
@@ -66,4 +106,24 @@ export const DEFAULT_MIGRATIONS: readonly DefaultMigration[] = [
   { filename: AGENT_COMPATIBILITY_FILENAME, module: agentCompatibility },
   { filename: TOMBSTONE_PROVENANCE_FILENAME, module: tombstoneProvenance },
   { filename: CUSTOM_MODEL_ENDPOINT_IDENTITY_FILENAME, module: customModelEndpointIdentity },
+  { filename: CUSTOM_ENDPOINT_HOST_LABELS_FILENAME, module: customEndpointHostLabels },
+  { filename: KEY_MODEL_SCOPE_FILENAME, module: keyModelScope },
+  { filename: CLIENT_PROFILES_FILENAME, module: clientProfiles },
+  { filename: API_KEY_PROXY_FILENAME, module: apiKeyProxy },
+  { filename: CUSTOM_MODEL_TOMBSTONES_FILENAME, module: customModelTombstones },
+  { filename: PLAYGROUND_CONVERSATIONS_FILENAME, module: playgroundConversations },
+  { filename: SERVER_LOGS_FILENAME, module: serverLogs },
+  { filename: BACKUPS_TABLE_FILENAME, module: backupsTable },
+  { filename: ATTEMPT_KEY_LABEL_FILENAME, module: attemptKeyLabel },
+  { filename: PROFILE_AUTO_INCLUDE_FILENAME, module: profileAutoInclude },
+  { filename: IDEMPOTENCY_CLAIMS_FILENAME, module: idempotencyClaims },
+  { filename: QUOTA_OBSERVATION_LOOKUP_FILENAME, module: quotaObservationLookup },
+  { filename: REQUEST_CALLER_FILENAME, module: requestCaller },
+  { filename: ANALYTICS_LATENCY_PERCENTILE_INDEX_FILENAME, module: analyticsLatencyPercentileIndex },
+  { filename: MCP_ENABLED_DEFAULT_FILENAME, module: mcpEnabledDefault },
+  { filename: RESPONSE_CACHE_FILENAME, module: responseCache },
+  { filename: KEY_MONTHLY_BUDGET_FILENAME, module: keyMonthlyBudget },
+  { filename: REQUEST_MODEL_ATTRIBUTION_FILENAME, module: requestModelAttribution },
+  { filename: KEY_MONTHLY_USAGE_FILENAME, module: keyMonthlyUsage },
+  { filename: QUOTA_SNAPSHOT_FRESHNESS_FILENAME, module: quotaSnapshotFreshness },
 ];

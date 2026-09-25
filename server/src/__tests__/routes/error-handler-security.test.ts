@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import express from 'express';
-import type { Express } from 'express';
 import { errorHandler } from '../../middleware/errorHandler.js';
 
 async function triggerError(message: string, status: number) {
@@ -12,7 +11,8 @@ async function triggerError(message: string, status: number) {
   });
   app.use(errorHandler);
 
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
+  if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
   const addr = server.address() as any;
   const res = await fetch(`http://127.0.0.1:${addr.port}/boom`);
   const json = await res.json();

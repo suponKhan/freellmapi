@@ -29,10 +29,43 @@ function setSettingIfMissing(db: LogTx, key: string, value: string): void {
   `).run(key, value);
 }
 
+// Resolve the concrete models.id for a request (#1187). Catalog requests
+// resolve by (platform, model_id); custom requests resolve through the
+// request's key (its normalized base_url is the row's endpoint_scope).
+// Returns NULL when the request is unattributable — a custom request whose
+// key never reached routing, or whose key no longer resolves to a matching
+// model row. An unattributable request must not land on the wrong relay.
+function resolveModelDbId(
+  db: LogTx,
+  platform: string,
+  modelId: string,
+  keyId: number | null,
+): number | null {
+  if (platform !== 'custom') {
+    const row = db.prepare('SELECT id FROM models WHERE platform = ? AND model_id = ? LIMIT 1')
+      .get(platform, modelId) as { id: number } | undefined;
+    return row?.id ?? null;
+  }
+  if (keyId == null) return null;
+  const key = db.prepare("SELECT base_url FROM api_keys WHERE id = ? AND platform = 'custom'")
+    .get(keyId) as { base_url: string | null } | undefined;
+  if (!key?.base_url) return null;
+  const scope = key.base_url.trim().replace(/\/+$/, '');
+  const row = db.prepare(
+    'SELECT id FROM models WHERE platform = ? AND model_id = ? AND endpoint_scope = ? LIMIT 1',
+  ).get('custom', modelId, scope) as { id: number } | undefined;
+  return row?.id ?? null;
+}
+
 // Append a row to the request analytics table. Shared by the chat proxy, the
 // responses path, and the fusion panel so every served (or failed) sub-request
 // is logged identically. Lives in a neutral lib module to avoid an import cycle
 // between the fusion service and the proxy route that both call it.
+//
+// Status is 'success', 'error', or 'canceled' (#752 — the client hung up
+// mid-attempt). A canceled request counts toward request totals — it happened —
+// but toward NEITHER success nor error: rates and scoring must read
+// success/(success+error), never success/total.
 //
 // In addition to the raw row, we update two durable aggregates so analytics
 // totals survive the raw-row prune (REQUEST_ANALYTICS_MAX_ROWS):
@@ -44,7 +77,9 @@ function setSettingIfMissing(db: LogTx, key: string, value: string): void {
 export function logRequest(
   platform: string,
   modelId: string,
-  keyId: number,
+  // NULL for rejections that never reached routing (no key was involved),
+  // e.g. an over-limit request body turned away at the parser.
+  keyId: number | null,
   status: string,
   inputTokens: number,
   outputTokens: number,
@@ -60,6 +95,17 @@ export function logRequest(
   // lib/served-model.ts). NULL when it matches or the provider reported
   // nothing usable, so the column stays empty in the healthy case.
   servedModel: string | null = null,
+  // Which gateway pathway produced this request. Today every inference
+  // surface writes 'http': the OpenAI-compatible proxy (/v1/chat/completions,
+  // /v1/completions), /v1/responses, /v1/messages, the Ollama + Gemini wires
+  // (lib/inbound-chat.ts), and fusion's panel/judge sub-calls. The /mcp
+  // JSON-RPC surface is introspection-only (list models, health, usage) and
+  // runs no inference, so it logs nothing; the dashboard playground calls the
+  // same HTTP endpoints as any other client and is indistinguishable from
+  // them here. The column is free-form so a future surface can add a value
+  // without a migration. NULL for call sites that pass no caller — notably
+  // the shared fallback loop's 'canceled' row, which is surface-agnostic.
+  caller: string | null = null,
 ) {
   try {
     const db = getDb();
@@ -68,9 +114,9 @@ export function logRequest(
     const client = getClientContext();
     const tx = db.transaction(() => {
       const insert = db.prepare(`
-        INSERT INTO requests (platform, model_id, key_id, status, input_tokens, output_tokens, latency_ms, error, ttfb_ms, requested_model, served_model, client_ip, client_user_agent, client_agent)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(platform, modelId, keyId, status, inputTokens, outputTokens, latencyMs, error, ttfbMs, requestedModel, servedModel, client.ip, client.userAgent, client.agent);
+        INSERT INTO requests (platform, model_id, key_id, status, input_tokens, output_tokens, latency_ms, error, ttfb_ms, requested_model, served_model, client_ip, client_user_agent, client_agent, caller, model_db_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(platform, modelId, keyId, status, inputTokens, outputTokens, latencyMs, error, ttfbMs, requestedModel, servedModel, client.ip, client.userAgent, client.agent, caller, resolveModelDbId(db, platform, modelId, keyId));
 
       // Report the row id back to the fallback loop's attempt trace (if one is
       // active): the LAST id noted during a loop run is the terminal row the
@@ -113,20 +159,21 @@ export function logRequest(
 // mid-stream error row, or the last per-attempt failure row). Called once per
 // request by the fallback loop AFTER the response is finished, so the write is
 // off the client's latency path. Zero-failure single-attempt successes write
-// exactly one 'ok' row; a trace with no parent row (e.g. a client abort before
-// any attempt was logged) writes nothing — consistent with the `requests`
-// table, which records nothing for those either.
+// exactly one 'ok' row. A trace with no parent row writes nothing — since the
+// fallback loop logs a 'canceled' row for pure client aborts (#752), that is
+// now only the loop-top stop paths, whose failed attempts each wrote their own
+// row already.
 export function persistRequestAttempts(trace: RequestTrace): void {
   if (trace.records.length === 0 || trace.lastRequestRowId == null) return;
   try {
     const db = getDb();
     const insert = db.prepare(`
-      INSERT INTO request_attempts (request_id, ordinal, platform, model_id, key_ordinal, outcome, start_offset_ms, duration_ms, error_summary)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO request_attempts (request_id, ordinal, platform, model_id, key_ordinal, key_label, outcome, start_offset_ms, duration_ms, error_summary)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const tx = db.transaction(() => {
       for (const r of trace.records) {
-        insert.run(trace.lastRequestRowId, r.ordinal, r.platform, r.modelId, r.keyOrdinal, r.outcome, r.startOffsetMs, r.durationMs, r.errorSummary);
+        insert.run(trace.lastRequestRowId, r.ordinal, r.platform, r.modelId, r.keyOrdinal, r.keyLabel, r.outcome, r.startOffsetMs, r.durationMs, r.errorSummary);
       }
     });
     tx();

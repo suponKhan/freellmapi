@@ -2,12 +2,14 @@ import crypto from 'crypto';
 import type { Db } from '../db/types.js';
 import { getDb, getSetting, setSetting } from '../db/index.js';
 import { hasProvider } from '../providers/index.js';
-import { MEDIA_PLATFORMS, TRANSCRIPTION_PLATFORMS } from './media.js';
+import { MEDIA_PLATFORMS, TRANSCRIPTION_PLATFORMS, VIDEO_PLATFORMS } from './media.js';
 import { EMBEDDING_PLATFORMS } from './embeddings.js';
 import type { Platform } from '@freellmapi/shared/types.js';
 import type { Scheduler } from '../lib/scheduler.js';
 import {
   applyAllModelOverrides,
+  refreshModelOverrideBaselines,
+  routableContextWindow,
   applyModelOverrides,
   deleteTombstonedCatalogModels,
   isCatalogModelTombstoned,
@@ -108,6 +110,11 @@ interface CatalogModel {
   modality?: string;
   /** Short display note for media models (e.g. "Keyless - up to 1024x1024"). */
   mediaNote?: string;
+  /** Adapter request flavor for media rows, where one platform hosts more than
+   *  one deployment style (cloudflare images: absent/'json' = JSON body,
+   *  'multipart' = form-data, which the FLUX.2 family requires). Mirrors the
+   *  same field on CatalogTranscriptionModel and lands in meta_json. */
+  requestStyle?: string | null;
 }
 
 interface CatalogEmbedding {
@@ -140,6 +147,20 @@ interface CatalogTranscriptionModel {
   quotaLabel?: string;
 }
 
+interface CatalogVideoModel {
+  platform: string;
+  modelId: string;
+  displayName: string;
+  /** Failover order within the video chain, lower first. */
+  priority: number;
+  enabled: boolean;
+  /** Short display note, mirrored into media_models.quota_label. */
+  quotaLabel?: string;
+  /** Provider-native deployment id when it differs from the public model id
+   *  (for example Hugging Face's fal.ai mapping). */
+  providerModelId?: string;
+}
+
 interface Catalog {
   version: string;
   generatedAt: string;
@@ -154,6 +175,9 @@ interface Catalog {
    * modality would ingest unknown-modality `models` entries as CHAT models,
    * while an unknown optional key is simply ignored by their isCatalog. */
   transcriptionModels?: CatalogTranscriptionModel[];
+  /** Text-to-video registry. Kept out of `models` so pre-video binaries ignore
+   *  it rather than routing unknown-modality rows through chat. */
+  videoModels?: CatalogVideoModel[];
   quirks: CatalogQuirk[];
 }
 
@@ -201,22 +225,30 @@ function isCatalog(value: unknown): value is Catalog {
             (m.maxBytes === undefined || m.maxBytes === null || typeof m.maxBytes === 'number') &&
             (m.requestStyle === undefined || m.requestStyle === null || typeof m.requestStyle === 'string'),
         ))) &&
+    (c.videoModels === undefined ||
+      (Array.isArray(c.videoModels) &&
+        c.videoModels.every(
+          (m) =>
+            typeof m?.platform === 'string' &&
+            typeof m?.modelId === 'string' &&
+            typeof m?.displayName === 'string' &&
+            typeof m?.priority === 'number' &&
+            typeof m?.enabled === 'boolean' &&
+            (m.quotaLabel === undefined || typeof m.quotaLabel === 'string') &&
+            (m.providerModelId === undefined || typeof m.providerModelId === 'string'),
+        ))) &&
     c.models.every(
       (m) =>
         typeof m?.platform === 'string' &&
         typeof m?.modelId === 'string' &&
         typeof m?.displayName === 'string' &&
         typeof m?.enabled === 'boolean' &&
+        (m.requestStyle === undefined || m.requestStyle === null || typeof m.requestStyle === 'string') &&
         !!m?.limits &&
         typeof m.limits === 'object',
     ) &&
     c.quirks.every((q) => typeof q?.slug === 'string' && Array.isArray(q?.targets))
   );
-}
-
-function routableContextWindow(platform: string, modelId: string, contextWindow: number | null): number | null {
-  if (platform === 'github' && modelId === 'openai/gpt-4.1') return 8000;
-  return contextWindow;
 }
 
 /**
@@ -238,6 +270,15 @@ function routableContextWindow(platform: string, modelId: string, contextWindow:
  *    dead-model migrations do (fallback_config row first, FK order).
  */
 export function applyCatalog(db: Db, catalog: Catalog): NonNullable<SyncResult['counts']> {
+  // One transaction for the whole apply (#1047): the body runs hundreds of
+  // individual statements, and under WAL each one outside a transaction is its
+  // own commit + fsync executed on the event loop. On slow storage that made
+  // the 12-hourly sync freeze every in-flight request — including the 3-query
+  // profile-activate POST — for minutes.
+  return db.transaction(() => applyCatalogInner(db, catalog))();
+}
+
+function applyCatalogInner(db: Db, catalog: Catalog): NonNullable<SyncResult['counts']> {
   const counts = { updated: 0, inserted: 0, removed: 0, skippedUnknownPlatform: 0, quirks: 0 };
 
   const selectModel = db.prepare('SELECT id, enabled, source FROM models WHERE platform = ? AND model_id = ?');
@@ -264,12 +305,12 @@ export function applyCatalog(db: Db, catalog: Catalog): NonNullable<SyncResult['
   const updateMedia = db.prepare(`
     UPDATE media_models SET
       display_name = @displayName, modality = @modality, priority = @priority,
-      quota_label = @quotaLabel, enabled = @enabled
+      quota_label = @quotaLabel, enabled = @enabled, meta_json = @metaJson
     WHERE id = @id
   `);
   const insertMedia = db.prepare(`
-    INSERT INTO media_models (platform, model_id, display_name, modality, priority, enabled, quota_label)
-    VALUES (@platform, @modelId, @displayName, @modality, @priority, @enabled, @quotaLabel)
+    INSERT INTO media_models (platform, model_id, display_name, modality, priority, enabled, quota_label, meta_json)
+    VALUES (@platform, @modelId, @displayName, @modality, @priority, @enabled, @quotaLabel, @metaJson)
   `);
   // Transcription rows share media_models but carry adapter metadata in
   // meta_json (subtitle capability, upload ceiling, request flavor).
@@ -307,6 +348,7 @@ export function applyCatalog(db: Db, catalog: Catalog): NonNullable<SyncResult['
     const inMediaCatalog = new Set<string>();
     const inEmbeddingCatalog = new Set<string>();
     const inTranscriptionCatalog = new Set<string>();
+    const inVideoCatalog = new Set<string>();
 
     for (const m of catalog.models) {
       // Media modalities are gated on MEDIA_PLATFORMS (decoupled from the chat
@@ -320,11 +362,16 @@ export function applyCatalog(db: Db, catalog: Catalog): NonNullable<SyncResult['
         if (isCatalogModelTombstoned(db, 'media', m.platform, m.modelId)) continue;
         inMediaCatalog.add(`${m.platform}:${m.modelId}`);
         const mrow = selectMedia.get(m.platform, m.modelId) as { id: number; enabled: number } | undefined;
+        // Generative-media meta carries only the adapter request flavor today;
+        // a row without one stores NULL so the adapter keeps its default.
+        const mmeta: Record<string, unknown> = {};
+        if (typeof m.requestStyle === 'string') mmeta.requestStyle = m.requestStyle;
         const mfields = {
           displayName: m.displayName,
           modality,
           priority: m.intelligenceRank ?? 0,
           quotaLabel: m.mediaNote ?? '',
+          metaJson: Object.keys(mmeta).length > 0 ? JSON.stringify(mmeta) : null,
         };
         if (mrow) {
           const enabled = m.enabled ? mrow.enabled : 0; // catalog disable wins; local disable wins
@@ -377,12 +424,47 @@ export function applyCatalog(db: Db, catalog: Catalog): NonNullable<SyncResult['
         // Catalog disable wins (dead upstream); local disable also wins.
         const enabled = m.enabled ? row.enabled : 0;
         updateModel.run({ ...fields, id: row.id, enabled });
+        refreshModelOverrideBaselines(db, m.platform, m.modelId);
         applyModelOverrides(db, m.platform, m.modelId);
         counts.updated++;
       } else {
         insertModel.run({ ...fields, platform: m.platform, modelId: m.modelId, enabled: m.enabled ? 1 : 0 });
+        refreshModelOverrideBaselines(db, m.platform, m.modelId);
         applyModelOverrides(db, m.platform, m.modelId);
         counts.inserted++;
+      }
+    }
+
+    // Video models use their own optional full snapshot. Older catalogs omit
+    // the key and leave existing video rows untouched; older binaries ignore
+    // the key entirely, which is why these rows must not live in models[].
+    if (catalog.videoModels) {
+      for (const m of catalog.videoModels) {
+        if (!VIDEO_PLATFORMS.has(m.platform)) {
+          counts.skippedUnknownPlatform++;
+          continue;
+        }
+        if (isCatalogModelTombstoned(db, 'media', m.platform, m.modelId)) continue;
+        inVideoCatalog.add(`${m.platform}:${m.modelId}`);
+        const meta = typeof m.providerModelId === 'string'
+          ? JSON.stringify({ providerModelId: m.providerModelId })
+          : null;
+        const fields = {
+          displayName: m.displayName,
+          modality: 'video',
+          priority: m.priority,
+          quotaLabel: m.quotaLabel ?? '',
+          metaJson: meta,
+        };
+        const row = selectMedia.get(m.platform, m.modelId) as { id: number; enabled: number } | undefined;
+        if (row) {
+          const enabled = m.enabled ? row.enabled : 0;
+          updateMedia.run({ ...fields, id: row.id, enabled });
+          counts.updated++;
+        } else {
+          insertMedia.run({ ...fields, platform: m.platform, modelId: m.modelId, enabled: m.enabled ? 1 : 0 });
+          counts.inserted++;
+        }
       }
     }
 
@@ -499,11 +581,14 @@ export function applyCatalog(db: Db, catalog: Catalog): NonNullable<SyncResult['
     }
 
     // Remove media models the catalog no longer lists (own table, no
-    // fallback_config). Scoped to the generative modalities: transcription
-    // rows are maintained by the `transcriptionModels` snapshot below, and
-    // must survive here even when its key is absent from an older catalog.
+    // fallback_config). Deliberately an ALLOWLIST of the two modalities that
+    // `models[]` maintains, not "everything except transcription": video and
+    // transcription rows come from their own optional snapshots below, so a
+    // catalog that omits those keys must leave them alone. Widening this back
+    // to a `!=` filter would silently delete every video row on the first sync
+    // from an older catalog.
     const mediaCandidates = db
-      .prepare("SELECT id, platform, model_id FROM media_models WHERE modality != 'transcription'")
+      .prepare("SELECT id, platform, model_id FROM media_models WHERE modality IN ('image', 'audio')")
       .all() as { id: number; platform: string; model_id: string }[];
     const deleteMedia = db.prepare('DELETE FROM media_models WHERE id = ?');
     for (const c of mediaCandidates) {
@@ -511,6 +596,21 @@ export function applyCatalog(db: Db, catalog: Catalog): NonNullable<SyncResult['
       if (!inMediaCatalog.has(`${c.platform}:${c.model_id}`)) {
         deleteMedia.run(c.id);
         counts.removed++;
+      }
+    }
+
+    // Prune video rows only when this catalog actually carries the dedicated
+    // snapshot. An older catalog cannot know whether a video row was retired.
+    if (catalog.videoModels) {
+      const videoCandidates = db
+        .prepare("SELECT id, platform, model_id FROM media_models WHERE modality = 'video'")
+        .all() as { id: number; platform: string; model_id: string }[];
+      for (const c of videoCandidates) {
+        if (!VIDEO_PLATFORMS.has(c.platform)) continue;
+        if (!inVideoCatalog.has(`${c.platform}:${c.model_id}`)) {
+          deleteMedia.run(c.id);
+          counts.removed++;
+        }
       }
     }
 
@@ -646,6 +746,35 @@ export async function syncCatalog(force = false): Promise<SyncResult> {
     console.warn(`[catalog-sync] ${message}`);
     setSetting(SETTING_LAST_ERROR, message);
     return { ok: false, action: 'error', detail: message };
+  }
+}
+
+/** Raw response from the catalog service's license activation endpoint. */
+export interface LicenseActivation {
+  valid: boolean;
+  plan: string | null;
+  status: string | null;
+  expiresAt: string | null;
+  reason?: string;
+}
+
+/**
+ * Validate a key with the license service. Returns null when the service is
+ * unreachable — distinguishable from a rejected key, so a transient outage can
+ * be warned about instead of reported as a bad key. Shared by the dashboard's
+ * POST /api/premium/key and declarative `license` config.
+ */
+export async function validateLicenseKey(key: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<LicenseActivation | null> {
+  try {
+    const res = await fetch(`${catalogBaseUrl()}/v1/license/activate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return (await res.json()) as LicenseActivation;
+  } catch {
+    return null;
   }
 }
 

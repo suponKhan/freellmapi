@@ -23,6 +23,7 @@
 
 import { z } from 'zod';
 import type { Platform } from '@freellmapi/shared/types.js';
+import { getSetting } from '../db/index.js';
 
 // OpenAI's request-side reasoning knob. Wire values as of the current OpenAI
 // API: 'minimal'|'low'|'medium'|'high', plus 'none' (gpt-5.1). Forwarded
@@ -203,6 +204,10 @@ export interface PlatformParamPolicy {
   // are 'text' and 'json_schema'."). Upgrade json_object to a permissive
   // json_schema on the wire instead of dropping structured output entirely.
   jsonObjectToSchema?: boolean;
+  // The reverse compatibility shim for providers that support JSON mode but
+  // not schema enforcement. Preserve structured output by requesting a JSON
+  // object instead of sending an unsupported json_schema payload.
+  jsonSchemaToObject?: boolean;
   // The effort values this platform's API accepts, when it accepts fewer than
   // the full scale. A request outside the set is clamped to the nearest
   // supported value instead of being forwarded into a 400 (#619). Omitted =
@@ -214,15 +219,46 @@ export interface PlatformParamPolicy {
   // experience as a broken stream rather than as a truncation. A
   // client-supplied value always wins, larger or smaller. Applied by the
   // adapters through resolveMaxTokens(), so a platform added here only takes
-  // effect once its adapter routes max_tokens through that helper
-  // (openai-compat + cloudflare already do).
+  // effect once its adapter routes max_tokens through that helper (they all
+  // do).
   defaultMaxTokens?: number;
+  // Output-token CEILING this platform's API enforces itself, applied by
+  // resolveMaxTokens() whatever the client asked for. The mirror image of
+  // defaultMaxTokens: a floor rescues a client that sent nothing, a cap
+  // rescues one that sent too much. Without it an aggressive max_tokens
+  // (Open WebUI's 65536 default) is a guaranteed 400 on every hop that lands
+  // on such a platform, and the fallback chain cannot repair it because the
+  // same value rides every candidate. Effective max_tokens is min(requested,
+  // this cap, the operator's unified cap).
+  maxTokensCap?: number;
 }
+
+/** GitHub Models' own output-token ceiling: asking for more 400s ("max_tokens
+ *  is too large"), so the request never reaches the model. Wired into the
+ *  github policy below as maxTokensCap. */
+export const GITHUB_MAX_OUTPUT_TOKENS = 400;
 
 // Keyed by Platform (not string) so a typo'd platform id fails tsc instead of
 // silently no-op'ing the policy; the string-typed accessors below cast at the
 // boundary since routes carry platform ids as plain strings.
 export const PLATFORM_PARAM_POLICIES: Partial<Record<Platform, PlatformParamPolicy>> = {
+  // Moondream maps reasoning effort to a boolean and max_tokens to
+  // max_completion_tokens. 4096 is the documented upstream output ceiling.
+  moondream: {
+    drop: ['top_k', 'min_p', 'seed', 'presence_penalty', 'frequency_penalty', 'repetition_penalty', 'logit_bias', 'logprobs', 'top_logprobs', 'response_format'],
+    maxTokensCap: 4096,
+  },
+  // ACLIDE uses Responses; these Chat Completions parameters have no mapping.
+  aclide: {
+    drop: ['top_k', 'min_p', 'seed', 'presence_penalty', 'frequency_penalty', 'repetition_penalty', 'logit_bias', 'logprobs', 'top_logprobs'],
+  },
+  // Sail's stable Responses API accepts temperature/top_p, JSON Schema output,
+  // tools and reasoning effort. The remaining Chat Completions knobs are not
+  // supported and are intentionally omitted by the dedicated adapter.
+  sail: {
+    drop: ['top_k', 'min_p', 'seed', 'presence_penalty', 'frequency_penalty', 'repetition_penalty', 'logit_bias', 'logprobs', 'top_logprobs'],
+    jsonObjectToSchema: true,
+  },
   // Mistral's API is strict (422 on unknown body keys) and names its seed
   // `random_seed`. It has no top_k/min_p/logit_bias/logprobs equivalents, and
   // no reasoning_effort (Magistral's reasoning has no request-side knob).
@@ -236,8 +272,14 @@ export const PLATFORM_PARAM_POLICIES: Partial<Record<Platform, PlatformParamPoli
   // GitHub Models sits on Azure OpenAI, which 400s "Unrecognized request
   // argument" for knobs outside the OpenAI set. Its reasoning_effort enum is
   // the older low/medium/high one, so 'none'/'minimal' are clamped rather
-  // than sent.
-  github: { drop: ['top_k', 'min_p', 'repetition_penalty'], reasoningEfforts: ['low', 'medium', 'high'] },
+  // than sent. Its free tier also refuses any max_tokens above
+  // GITHUB_MAX_OUTPUT_TOKENS, so the cap is clamped here instead of being
+  // spent as a wasted fallback hop.
+  github: {
+    drop: ['top_k', 'min_p', 'repetition_penalty'],
+    reasoningEfforts: ['low', 'medium', 'high'],
+    maxTokensCap: GITHUB_MAX_OUTPUT_TOKENS,
+  },
   // Gemini's generationConfig has no equivalents for these; the adapter
   // translates the rest natively (topK, seed, penalties, responseSchema, and
   // reasoning_effort → thinkingConfig — see toGeminiExtendedConfig).
@@ -258,6 +300,14 @@ export const PLATFORM_PARAM_POLICIES: Partial<Record<Platform, PlatformParamPoli
   cloudflare: {
     drop: ['min_p', 'logit_bias', 'logprobs', 'top_logprobs', 'reasoning_effort'],
     defaultMaxTokens: 8192,
+  },
+  // Radeon Cloud silently drops these fields. Keep reasoning_effort within the
+  // common subset of its current shared roster (Qwen: low/medium; DeepSeek is
+  // broader) so either model receives a supported value.
+  radeon: {
+    drop: ['top_k', 'min_p', 'seed', 'repetition_penalty', 'logit_bias', 'logprobs', 'top_logprobs'],
+    reasoningEfforts: ['low', 'medium'],
+    jsonSchemaToObject: true,
   },
   // AI Horde builds its own payload format; none of the extended set maps.
   aihorde: { drop: [...EXTENDED_SAMPLING_KEYS] },
@@ -298,6 +348,10 @@ export function extendedBodyParams(platform: string, options: ExtendedSamplingOp
         && (value as { type?: string }).type === 'json_object') {
       value = ANY_OBJECT_SCHEMA;
     }
+    if (key === 'response_format' && policy?.jsonSchemaToObject
+        && (value as { type?: string }).type === 'json_schema') {
+      value = { type: 'json_object' };
+    }
     if (key === 'reasoning_effort' && policy?.reasoningEfforts) {
       value = clampEffortTo(value as ReasoningEffort, policy.reasoningEfforts);
       if (value === undefined) continue;
@@ -313,15 +367,67 @@ export function defaultMaxTokensFor(platform: string): number | undefined {
   return PLATFORM_PARAM_POLICIES[platform as Platform]?.defaultMaxTokens;
 }
 
+/** This platform's own output-token ceiling, or undefined when it accepts
+ *  whatever max_tokens the client asks for. */
+export function maxTokensCapFor(platform: string): number | undefined {
+  return PLATFORM_PARAM_POLICIES[platform as Platform]?.maxTokensCap;
+}
+
 /**
  * The max_tokens to put on the wire for one request: whatever the client asked
- * for, or the platform's floor when the client asked for nothing (#553).
- * Never clamps — a client-set value passes through untouched in both
+ * for, or the platform's floor when the client asked for nothing (#553), then
+ * lowered to the tightest ceiling that applies — the platform's own
+ * maxTokensCap, the operator's unified cap, or both. With neither in play
+ * nothing is clamped — a client-set value passes through untouched in both
  * directions, and the gateway's own guardrails (token budget, routing reserve)
  * have already had their say by the time an adapter calls this.
+ *
+ * EVERY adapter must send max_tokens through here, or the cap is not unified:
+ * openai-compat (and its subclasses), cloudflare, cohere, google and aihorde
+ * all do.
  */
-export function resolveMaxTokens(platform: string, requested: number | undefined): number | undefined {
-  return requested ?? defaultMaxTokensFor(platform);
+export function resolveMaxTokens(platform: string, requested: number | undefined, contextBudget?: number): number | undefined {
+  const resolved = requested ?? defaultMaxTokensFor(platform);
+  if (resolved == null) return resolved;
+  // The tighter ceiling wins: a platform's hard reject applies even with the
+  // operator cap off, and an operator cap below it applies everywhere.
+  const caps = [unifiedMaxTokensCap(), maxTokensCapFor(platform), contextBudget].filter((c): c is number => c != null && c > 0);
+  return caps.length === 0 ? resolved : Math.max(1, Math.min(resolved, ...caps));
+}
+
+// ── Unified output-token cap ─────────────────────────────────────────────────
+// Optional operator-level ceiling on max_tokens for EVERY client. Aggressive
+// clients (Open WebUI sends max_tokens=65536 by default) 400 against free
+// models whose output limit is 32768 (CF qwen3-30b, zhipu glm), and without a
+// ceiling the same invalid value rides every fallback candidate — the chain
+// cannot rescue the request. The cap only LOWERS an
+// excessive value; a client value at or below it is untouched, and clients that
+// send nothing still get today's platform floor. 'off' (default) keeps the
+// historical pass-through behaviour.
+export const UNIFIED_MAX_TOKENS_SETTING = 'unified_max_tokens';
+/** The ceiling 'auto' clamps to: the output limit of the largest common free
+ *  catalog models. */
+export const UNIFIED_MAX_TOKENS_AUTO = 32768;
+
+/** The configured unified output cap, or null when disabled ('off'/unset).
+ *  'auto' resolves to UNIFIED_MAX_TOKENS_AUTO; an explicit integer is used
+ *  verbatim; anything else is treated as disabled so a bad value can't 400
+ *  requests. Reads the settings table on every call — cheap (better-sqlite3
+ *  sync read) and picks up dashboard changes without a restart, mirroring
+ *  guardrails.ts. */
+export function unifiedMaxTokensCap(): number | null {
+  let raw: string | undefined;
+  try {
+    raw = getSetting(UNIFIED_MAX_TOKENS_SETTING);
+  } catch {
+    return null; // DB not ready — never throw on the proxy hot path
+  }
+  if (!raw) return null;
+  const value = raw.trim().toLowerCase();
+  if (value === '' || value === 'off' || value === '0') return null;
+  if (value === 'auto') return UNIFIED_MAX_TOKENS_AUTO;
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 /** True when this platform's policy strips response_format before send — the
@@ -334,6 +440,8 @@ export function platformDropsResponseFormat(platform: string): boolean {
  *  every surface supports, plus tools when the model does, minus the
  *  platform's droplist. */
 export function supportedParametersFor(platform: string, caps: { tools?: boolean } = {}): string[] {
+  // Unlike the generic base set, Moondream has neither stop nor tools.
+  if (platform === 'moondream') return ['temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stream', 'reasoning_effort'];
   const policy = PLATFORM_PARAM_POLICIES[platform as Platform];
   const dropped = new Set<string>(policy?.drop ?? []);
   const params = [

@@ -8,7 +8,8 @@ import { mintDashboardToken } from '../helpers/auth.js';
 let dashToken = '';
 
 async function request(app: Express, path: string, withAuth = true) {
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
+  if (!server.listening) await new Promise<void>(resolve => server.once('listening', () => resolve()));
   const addr = server.address() as { port: number };
   const res = await fetch(`http://127.0.0.1:${addr.port}${path}`, {
     headers: withAuth ? { Authorization: `Bearer ${dashToken}` } : {},
@@ -52,6 +53,8 @@ describe('GET /api/keys/providers — provider checklist (#543)', () => {
     expect(groq).toMatchObject({ platform: 'groq', configured: false, keyCount: 0 });
     expect(typeof groq.name).toBe('string');
     expect(typeof groq.keyless).toBe('boolean');
+    expect(body.providers.find((p: { platform: string }) => p.platform === 'moondream'))
+      .toMatchObject({ platform: 'moondream', name: 'Moondream', configured: false, keyless: false });
     expect(body.summary).toEqual({
       total: body.providers.length,
       configured: 0,

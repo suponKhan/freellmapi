@@ -8,6 +8,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { getDb } from '../db/index.js';
+import { monthlyBudgetScore } from '../lib/budget.js';
 
 export const profilesRouter = Router();
 
@@ -34,6 +35,12 @@ const createSchema = z.object({
   emoji: z.string().max(4).default(''),
   color: z.string().default('#6366f1'),
   sourceProfileId: z.number().optional(),
+  // Start the chain with nothing in it instead of a copy of the whole catalog
+  // (#895). The point of a named chain is usually "these three models, in this
+  // order" — starting from 200 rows means deleting 197 of them by hand. An
+  // empty chain also opts out of the catalog-sync backfill, so it stays as
+  // small as the user built it.
+  empty: z.boolean().default(false),
 });
 
 const updateSchema = z.object({
@@ -44,6 +51,7 @@ const updateSchema = z.object({
   sort_order: z.number().optional(),
   auto_sort: z.enum(['intelligence', 'speed', 'budget']).nullable().optional(),
   layout_config: z.string().nullable().optional(),
+  auto_include_new_models: z.boolean().optional(),
 });
 
 function getId(req: Request): number {
@@ -58,7 +66,7 @@ function getId(req: Request): number {
 profilesRouter.get('/', (_req: Request, res: Response) => {
   const db = getDb();
   const profiles = db.prepare(`
-    SELECT id, name, emoji, color, type, is_favorite, sort_order, auto_sort, layout_config, created_at
+    SELECT id, name, emoji, color, type, is_favorite, sort_order, auto_sort, layout_config, auto_include_new_models, created_at
     FROM profiles
     ORDER BY (CASE WHEN type = 'default' THEN 1 ELSE 0 END) DESC, is_favorite DESC, sort_order ASC, id ASC
   `).all();
@@ -136,7 +144,7 @@ profilesRouter.post('/', (req: Request, res: Response) => {
   }
 
   const db = getDb();
-  const { name, emoji, color, sourceProfileId } = parsed.data;
+  const { name, emoji, color, sourceProfileId, empty } = parsed.data;
 
   // Check for case-insensitive duplicate profile names
   const duplicate = db.prepare('SELECT id FROM profiles WHERE LOWER(name) = LOWER(?)').get(name) as any;
@@ -158,16 +166,18 @@ profilesRouter.post('/', (req: Request, res: Response) => {
   }
 
   const result = db.prepare(
-    'INSERT INTO profiles (name, emoji, color, type, sort_order, layout_config, auto_sort) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(name, emoji, color, 'custom', maxOrder + 1, layoutConfig, autoSort);
+    'INSERT INTO profiles (name, emoji, color, type, sort_order, layout_config, auto_sort, auto_include_new_models) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(name, emoji, color, 'custom', maxOrder + 1, layoutConfig, autoSort, empty ? 0 : 1);
 
   const profileId = result.lastInsertRowid as number;
 
-  if (sourceProfileId) {
-    const source = db.prepare('SELECT id FROM profiles WHERE id = ?').get(sourceProfileId) as any;
-    if (!source) {
-      copyFromDefault(db, profileId);
-    } else {
+  // `empty` wins over `sourceProfileId`: it is the more specific of the two
+  // requests, and copying a source chain in would defeat the point of it.
+  if (!empty) {
+    const source = sourceProfileId
+      ? db.prepare('SELECT id FROM profiles WHERE id = ?').get(sourceProfileId) as any
+      : null;
+    if (source) {
       db.prepare(`
         INSERT INTO profile_models (profile_id, model_db_id, priority, enabled)
         SELECT ?, model_db_id, priority, enabled
@@ -175,12 +185,12 @@ profilesRouter.post('/', (req: Request, res: Response) => {
         WHERE profile_id = ?
         ORDER BY priority ASC
       `).run(profileId, sourceProfileId);
+    } else {
+      copyFromDefault(db, profileId);
     }
-  } else {
-    copyFromDefault(db, profileId);
   }
 
-  const created = db.prepare('SELECT id, name, emoji, color, type, is_favorite, sort_order, auto_sort, layout_config, created_at FROM profiles WHERE id = ?').get(profileId);
+  const created = db.prepare('SELECT id, name, emoji, color, type, is_favorite, sort_order, auto_sort, layout_config, auto_include_new_models, created_at FROM profiles WHERE id = ?').get(profileId);
   res.status(201).json(created);
 });
 
@@ -197,7 +207,7 @@ function copyFromDefault(db: any, profileId: number) {
 profilesRouter.put('/:id', (req: Request, res: Response) => {
   const db = getDb();
   const profileId = getId(req);
-  const profile = db.prepare('SELECT id, type FROM profiles WHERE id = ?').get(profileId) as any;
+  const profile = db.prepare('SELECT id, name, type FROM profiles WHERE id = ?').get(profileId) as any;
   if (!profile) {
     res.status(404).json({ error: { message: 'Profile not found' } });
     return;
@@ -206,6 +216,17 @@ profilesRouter.put('/:id', (req: Request, res: Response) => {
   const parsed = updateSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: { message: parsed.error.errors.map(e => e.message).join(', ') } });
+    return;
+  }
+
+  const isProtected = profile.type === 'default' || profile.type === 'builtin';
+
+  // A chain's name is the address clients route with (auto:<name>), and the
+  // built-in names are fixed in docs and client configs. Say so with a 403
+  // rather than silently dropping the rename (#1179); an unchanged name sent
+  // along with other fields still passes.
+  if (isProtected && parsed.data.name !== undefined && parsed.data.name !== profile.name) {
+    res.status(403).json({ error: { message: 'Built-in chains cannot be renamed' } });
     return;
   }
 
@@ -218,7 +239,6 @@ profilesRouter.put('/:id', (req: Request, res: Response) => {
     }
   }
 
-  const isProtected = profile.type === 'default' || profile.type === 'builtin';
   const updates: string[] = [];
   const values: any[] = [];
   for (const [key, value] of Object.entries(parsed.data)) {
@@ -227,8 +247,8 @@ profilesRouter.put('/:id', (req: Request, res: Response) => {
       if (isProtected && (key === 'name' || key === 'emoji' || key === 'color')) {
         continue;
       }
-      if (key === 'is_favorite') {
-        updates.push('is_favorite = ?');
+      if (key === 'is_favorite' || key === 'auto_include_new_models') {
+        updates.push(`${key} = ?`);
         values.push(value ? 1 : 0);
       } else {
         updates.push(`${key} = ?`);
@@ -247,7 +267,7 @@ profilesRouter.put('/:id', (req: Request, res: Response) => {
     sortProfileModels(db, profileId, parsed.data.auto_sort);
   }
 
-  const updated = db.prepare('SELECT id, name, emoji, color, type, is_favorite, sort_order, auto_sort, layout_config, created_at FROM profiles WHERE id = ?').get(profileId);
+  const updated = db.prepare('SELECT id, name, emoji, color, type, is_favorite, sort_order, auto_sort, layout_config, auto_include_new_models, created_at FROM profiles WHERE id = ?').get(profileId);
   res.json(updated);
 });
 
@@ -320,7 +340,7 @@ profilesRouter.post('/:id/reset', (req: Request, res: Response) => {
   });
   transaction();
 
-  const updated = db.prepare('SELECT id, name, emoji, color, type, is_favorite, sort_order, auto_sort, layout_config, created_at FROM profiles WHERE id = ?').get(profileId);
+  const updated = db.prepare('SELECT id, name, emoji, color, type, is_favorite, sort_order, auto_sort, layout_config, auto_include_new_models, created_at FROM profiles WHERE id = ?').get(profileId);
   res.json(updated);
 });
 
@@ -366,35 +386,12 @@ const SORT_PRESETS: Record<string, string> = {
   speed: 'm.speed_rank ASC',
 };
 
-function getBudgetScore(m: { monthly_token_budget: string; tpd_limit: number | null }): number {
-  if (m.tpd_limit != null) return m.tpd_limit * 30;
-  
-  const str = m.monthly_token_budget;
-  if (!str) return 0;
-  if (str.toLowerCase().includes('unlimited') || str.includes('∞')) return Infinity;
-  
-  const cleanStr = str.split('(')[0];
-  const matches = cleanStr.match(/[\d.]+/g);
-  let maxNum = 0;
-  if (matches) {
-    maxNum = Math.max(...matches.map(mStr => parseFloat(mStr)));
-  }
-  
-  let mult = 1;
-  const upper = cleanStr.toUpperCase();
-  if (upper.includes('B')) mult = 1_000_000_000;
-  else if (upper.includes('M')) mult = 1_000_000;
-  else if (upper.includes('K')) mult = 1_000;
-
-  return maxNum * mult;
-}
-
 function sortProfileModels(db: any, profileId: number, preset: string) {
   let models: { id: number }[] = [];
 
   if (preset === 'budget') {
     const allModels = db.prepare(`SELECT id, monthly_token_budget, tpd_limit FROM models`).all() as any[];
-    allModels.sort((a, b) => getBudgetScore(b) - getBudgetScore(a));
+    allModels.sort((a, b) => monthlyBudgetScore(b) - monthlyBudgetScore(a));
     models = allModels.map(m => ({ id: m.id }));
   } else {
     const orderBy = SORT_PRESETS[preset];

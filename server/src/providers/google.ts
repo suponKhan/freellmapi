@@ -13,6 +13,7 @@ import { proxyFetch } from '../lib/proxy.js';
 import { recordQuotaObservationsFromResponse, type QuotaObservationContext } from '../services/provider-quota.js';
 import { providerTimeoutMs, streamStallTimeoutMs } from '../lib/provider-timeout.js';
 import { sanitizeForGemini } from '../lib/gemini-wire.js';
+import { resolveMaxTokens } from '../lib/sampling-params.js';
 
 export { sanitizeForGemini } from '../lib/gemini-wire.js';
 
@@ -43,6 +44,34 @@ function canonicalThoughtSigArgs(args: unknown): string {
 function thoughtSigCallKey(name: string | undefined, args: unknown): string | undefined {
   if (!name) return undefined;
   return `call:${name}:${canonicalThoughtSigArgs(args)}`;
+}
+
+// Fallback for functionCall parts that have neither a client-preserved nor a
+// cached signature (replayed history after a restart, TTL expiry, calls first
+// produced by another provider). Gemini 3 strictly validates the field, but
+// the signature is an encrypted blob the server checks — a fabricated value
+// (e.g. a hash) is NOT accepted. Google documents exactly two sentinel
+// strings for calls the API didn't produce; either tells the server to skip
+// signature validation (at the cost of some reasoning quality), which is the
+// official last resort for signature-less history.
+const DUMMY_THOUGHT_SIGNATURE = 'context_engineering_is_the_way_to_go';
+
+// The sentinel is a silent quality trade — Gemini stops validating and loses
+// the reasoning thread for that call — so say so once per process. A steady
+// stream of these means the cache is missing (restart loop, TTL too short, or
+// history minted by another provider) rather than a one-off replay, and
+// without a log there is nothing to correlate degraded tool-calling against.
+let warnedDummyThoughtSig = false;
+
+function noteDummyThoughtSignature(name: string | undefined): void {
+  if (warnedDummyThoughtSig) return;
+  warnedDummyThoughtSig = true;
+  console.warn(
+    `[Google] no thought_signature for a replayed tool call (${name ?? 'unknown'}); ` +
+    'falling back to the documented skip-validation sentinel — Gemini will not ' +
+    'validate the signature for these turns, at some reasoning-quality cost. ' +
+    '(Logged once per process.)',
+  );
 }
 
 function rememberThoughtSigKey(key: string | undefined, sig: string | undefined): void {
@@ -389,7 +418,13 @@ async function toGeminiContents(messages: ChatMessage[]): Promise<{
           // Prefer a signature the client preserved; otherwise recover the one
           // we cached when this call was first produced (OpenAI-format clients
           // drop the field, so this is the common path for Gemini multi-turn).
-          const sig = call.thought_signature ?? recallThoughtSig(call.id, call.function.name, call.function.arguments);
+          // If neither is available, fall back to Google's documented dummy
+          // sentinel so a signature-less replay still passes the strict 400
+          // check (parallel calls get it on every part — harmless, since the
+          // sentinel means "skip validation").
+          const known = call.thought_signature ?? recallThoughtSig(call.id, call.function.name, call.function.arguments);
+          if (!known) noteDummyThoughtSignature(call.function.name);
+          const sig = known ?? DUMMY_THOUGHT_SIGNATURE;
           parts.push({
             thoughtSignature: sig,
             functionCall: {
@@ -525,7 +560,7 @@ export class GoogleProvider extends BaseProvider {
       contents: request.contents,
       generationConfig: {
         temperature: options?.temperature,
-        maxOutputTokens: options?.max_tokens,
+        maxOutputTokens: resolveMaxTokens(this.platform, options?.max_tokens, options?.contextBudget),
         topP: options?.top_p,
         stopSequences: toGeminiStopSequences(options?.stop),
         ...toGeminiExtendedConfig(options),
@@ -557,7 +592,7 @@ export class GoogleProvider extends BaseProvider {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw providerHttpError(res, `Google API error ${res.status}: ${(err as any).error?.message ?? res.statusText}`);
+      throw providerHttpError(res, `Google API error ${res.status}: ${(err as any).error?.message ?? res.statusText}`, err);
     }
 
     const data = await res.json() as GeminiResponse;
@@ -608,7 +643,7 @@ export class GoogleProvider extends BaseProvider {
       contents: request.contents,
       generationConfig: {
         temperature: options?.temperature,
-        maxOutputTokens: options?.max_tokens,
+        maxOutputTokens: resolveMaxTokens(this.platform, options?.max_tokens, options?.contextBudget),
         topP: options?.top_p,
         stopSequences: toGeminiStopSequences(options?.stop),
         ...toGeminiExtendedConfig(options),
@@ -638,7 +673,7 @@ export class GoogleProvider extends BaseProvider {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw providerHttpError(res, `Google API error ${res.status}: ${(err as any).error?.message ?? res.statusText}`);
+      throw providerHttpError(res, `Google API error ${res.status}: ${(err as any).error?.message ?? res.statusText}`, err);
     }
 
     const reader = res.body?.getReader();
@@ -675,8 +710,9 @@ export class GoogleProvider extends BaseProvider {
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith('data: ')) continue;
-          const raw = trimmed.slice(6);
+          // `data:` with or without the space, same as BaseProvider (#1087).
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
+          const raw = trimmed.slice(5).replace(/^ /, '');
           if (raw === '[DONE]') {
             if (!emittedFinish) {
               emittedFinish = true;
@@ -762,18 +798,24 @@ export class GoogleProvider extends BaseProvider {
       reader.cancel().catch(() => { /* upstream already gone */ });
     }
 
+    // Reaching here means the body ended with neither `[DONE]` nor any
+    // `finishReason` — both legitimate terminators `return` from inside the
+    // loop above, so the only way out to this point is the `if (done) break`
+    // on an abrupt EOF (an h2 END_STREAM from an edge, or the backend cutting
+    // the generation mid-answer).
+    //
+    // This used to synthesize `finish_reason: 'stop'`, which told the client a
+    // half-written answer had completed normally: no failover, the request row
+    // logged 'success', and the route never benched. base.ts:392-397 states the
+    // opposite contract for every adapter that goes through readSseStream —
+    // "a stream that ends without [DONE] AND without any finish_reason is a
+    // truncated generation, not a completion" — and throws (base.ts:471). This
+    // adapter parses Gemini's own frame format and reads the body itself, so it
+    // never inherited that. Throw the same message: isStreamTruncatedError
+    // (lib/error-classify.ts:685) matches on it, and the fallback loop already
+    // fails over and bench-counts the streak (lib/fallback-loop.ts:485).
     if (!emittedFinish) {
-      yield {
-        id,
-        object: 'chat.completion.chunk',
-        created: Math.floor(Date.now() / 1000),
-        model: modelId,
-        choices: [{
-          index: 0,
-          delta: {},
-          finish_reason: sawToolCalls ? 'tool_calls' : 'stop',
-        }],
-      };
+      throw new Error(`${this.name} stream ended unexpectedly (no [DONE], no finish_reason) — connection reset or truncated upstream`);
     }
   }
 
