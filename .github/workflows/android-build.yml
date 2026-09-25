@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
       
@@ -17,16 +19,13 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Android SDK
+      - name: Verify Android SDK
         run: |
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11066339_latest.zip -O cmd-tools.zip
-          mkdir -p $ANDROID_HOME
-          unzip -q cmd-tools.zip -d $ANDROID_HOME
-          yes | $ANDROID_HOME/cmd-tools/bin/sdkmanager --sdk_root=$ANDROID_HOME --install \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls $ANDROID_HOME/ 2>/dev/null || echo "SDK not found"
+          ls $ANDROID_HOME/platform-tools/ 2>/dev/null || echo "No platform-tools"
+          ls $ANDROID_HOME/platforms/ 2>/dev/null || echo "No platforms"
+          ls $ANDROID_HOME/build-tools/ 2>/dev/null || echo "No build-tools"
 
       - name: Generate debug keystore
         working-directory: android-app
