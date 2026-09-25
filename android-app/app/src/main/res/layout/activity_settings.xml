@@ -78,12 +78,26 @@
         </LinearLayout>
 
         <Button
-            android:id="@+id/btnSave"
-            android:layout_marginTop="18dp"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Save" />
+                    android:id="@+id/btnSave"
+                    android:layout_marginTop="18dp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Save" />
 
-    </LinearLayout>
+                <Button
+                    android:id="@+id/btnStartService"
+                    android:layout_marginTop="12dp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Start Service (Keep Alive)" />
 
-</ScrollView>
+                <Button
+                    android:id="@+id/btnStopService"
+                    android:layout_marginTop="8dp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Stop Service" />
+
+            </LinearLayout>
+
+        </ScrollView>

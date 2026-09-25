@@ -1,0 +1,46 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Fork
+        uses: actions/checkout@v4
+        with:
+          ref: android-gateway
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure Git
+        run: |
+          git config user.name "Hermes Sync Bot"
+          git config user.email "bot@nousresearch.com"
+          git remote add upstream https://github.com/tashfeenahmed/freellmapi.git
+      
+      - name: Fetch Upstream
+        run: |
+          git fetch upstream main
+          git checkout -b sync-temp upstream/main
+      
+      - name: Merge Upstream into android-gateway
+        run: |
+          git checkout android-gateway
+          git merge sync-temp -m "Auto-sync from upstream main" || {
+            echo "Merge conflict detected, attempting auto-resolution";
+            git merge --abort;
+            git checkout --theirs android-app/ app/ server/ docs/ README.md;
+            git add -A;
+            git commit -m "Auto-sync from upstream main (auto-resolved)";
+          }
+      
+      - name: Push to android-gateway
+        run: |
+          git push origin android-gateway --force
