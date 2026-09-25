@@ -28,5 +28,23 @@ class SettingsActivity : ComponentActivity() {
         val etHost = findViewById<EditText>(R.id.etHost)
         val etPort = findViewById<EditText>(R.id.etPort)
         val swStreaming = findViewById<Switch>(R.id.swStreaming)
-        valSAVE = ...
-KOTLIN_EOF
+        val btnSave = findViewById<Button>(R.id.btnSave)
+
+        etBase.setText(sharedPreferences.getString("baseUrl", ""))
+        etApi.setText(sharedPreferences.getString("apiKey", ""))
+        etHost.setText(sharedPreferences.getString("bindHost", "127.7.7.7"))
+        etPort.setText(sharedPreferences.getInt("bindPort", 8080).toString())
+        swStreaming.isChecked = sharedPreferences.getBoolean("streaming", true)
+
+        btnSave.setOnClickListener {
+            val editor = sharedPreferences.edit()
+            editor.putString("baseUrl", etBase.text.toString())
+            editor.putString("apiKey", etApi.text.toString())
+            editor.putString("bindHost", etHost.text.toString())
+            editor.putInt("bindPort", etPort.text.toString().toIntOrNull() ?: 8080)
+            editor.putBoolean("streaming", swStreaming.isChecked)
+            editor.apply()
+            finish()
+        }
+    }
+}
