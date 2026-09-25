@@ -3,31 +3,24 @@ name: Android Build & Release
 on:
   push:
     branches: [ android-gateway ]
-    paths-ignore:
-      - 'build-log*.txt'
-      - '**.md'
   workflow_dispatch:
 
 jobs:
   sync-upstream:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/tashfeenahmed/freellmapi.git || true
-
-      - name: Sync from upstream (merge, keep gateway changes)
+      - name: Sync
         run: |
           git fetch upstream main
-          git merge upstream/main --no-edit -X ours || echo "Merge conflict — keeping android-gateway changes"
-          git push origin HEAD:android-gateway || echo "Sync push failed (non-fatal)"
+          git merge upstream/main --no-edit -X ours || true
+          git push origin HEAD:android-gateway
 
   build:
     runs-on: ubuntu-latest
@@ -36,123 +29,39 @@ jobs:
       matrix:
         arch: [ arm64, arm32 ]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Install Android SDK
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: 'temurin', java-version: '17' }
+      
+      # Use a more robust Android SDK setup action or manual install
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           api-level: 34
           build-tools: 34.0.0
-          ndk: '25.1.8937379'
-
-      - name: Set up Gradle 8.2.1
-        uses: gradle/gradle-build-action@v3
-        with:
-          gradle-version: 8.2.1
-
+          # Ensure ndk version exists or remove specific version
+          
       - name: Generate debug keystore
         working-directory: android-app
         run: |
-          keytool -genkeypair -v -keystore app/debug.keystore \
+          keytool -genkeypair -v -keystore debug.keystore \
             -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass android -keypass android \
             -dname "CN=Android Debug,O=Android,C=US"
 
-      - name: Build APK (${{ matrix.arch }})
+      - name: Build APK
         working-directory: android-app
         run: |
-          echo "=== Environment ==="
-          echo "JAVA_HOME=$JAVA_HOME"
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          which gradle
-          gradle --version
-          echo "=== Building ${{ matrix.arch }} APK ==="
-          set -o pipefail
-          gradle clean assemble${{ matrix.arch }}Release --no-daemon --console=plain --stacktrace 2>&1 | tee build-log-${{ matrix.arch }}.txt
-          BUILD_EXIT=${PIPESTATUS[0]}
-          echo "BUILD EXIT CODE: $BUILD_EXIT"
-          exit $BUILD_EXIT
-
-      - name: Push build log via git
-        if: always()
-        working-directory: android-app
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add build-log-${{ matrix.arch }}.txt || true
-          git diff --cached --stat || true
-          git commit -m "build log (${{ matrix.arch }})" || echo "Nothing to commit"
-          git push origin HEAD:android-gateway || echo "Push failed (non-fatal)"
-
-      - name: Search for APK
-        if: always()
-        working-directory: android-app
-        run: |
-          echo "=== APK files ==="
-          find . -name "*.apk" -type f 2>/dev/null
-          echo "=== Build outputs ==="
-          ls -la app/build/outputs/apk/${{ matrix.arch }}/release/ 2>/dev/null || echo "No release dir"
-
-      - name: Upload build log artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-${{ matrix.arch }}
-          path: android-app/build-log-${{ matrix.arch }}.txt
-          if-no-files-found: warn
-
-      - name: Upload APK artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: freellm-gateway-apk-${{ matrix.arch }}
-          path: android-app/app/build/outputs/apk/${{ matrix.arch }}/release/*.apk
-          if-no-files-found: warn
-
-  release:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Download arm64 APK
-        uses: actions/download-artifact@v4
-        with:
-          name: freellm-gateway-apk-arm64
-          path: artifacts/arm64
-
-      - name: Download arm32 APK
-        uses: actions/download-artifact@v4
-        with:
-          name: freellm-gateway-apk-arm32
-          path: artifacts/arm32
-
-      - name: Find APKs
-        id: find_apks
-        run: |
-          APK64=$(find artifacts/arm64 -name "*.apk" | head -1)
-          APK32=$(find artifacts/arm32 -name "*.apk" | head -1)
-          echo "apk64=$APK64" >> $GITHUB_OUTPUT
-          echo "apk32=$APK32" >> $GITHUB_OUTPUT
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: android-gateway-${{ github.sha }}
-          name: FreeLLM Gateway Android (${{ github.sha }})
-          body: |
-            Auto-built from android-gateway branch.
-            - arm64-v8a (64-bit): ${{ steps.find_apks.outputs.apk64 }}
-            - armeabi-v7a (32-bit): ${{ steps.find_apks.outputs.apk32 }}
-          files: |
-            ${{ steps.find_apks.outputs.apk64 }}
-            ${{ steps.find_apks.outputs.apk32 }}
-          make_latest: true
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORG_GRADLE_PROJECT_android.injected.signing.storeFile: debug.keystore
+          ORG_GRADLE_PROJECT_android.injected.signing.storePassword: android
+          ORG_GRADLE_PROJECT_android.injected.signing.keyAlias: androiddebugkey
+          ORG_GRADLE_PROJECT_android.injected.signing.keyPassword: android
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: freellm-gateway-${{ matrix.arch }}
+          path: android-app/app/build/outputs/apk/release/*.apk
