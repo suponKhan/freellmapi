@@ -1,95 +1,79 @@
-name: android-build
+name: Android Build & Release
+
 on:
   push:
-    branches: [ android-gateway ]
-    paths-ignore:
-      - 'build-log.txt'
+    branches:
+      - android-gateway
+  pull_request:
+    branches:
+      - android-gateway
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        abi: [armeabi-v7a, arm64-v8a]
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
-      - name: Set up JDK 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          api-level: 34
-          build-tools: 34.0.0
-
-      - name: Set up Gradle 8.2.1
+      - name: Setup Gradle
         uses: gradle/gradle-build-action@v3
         with:
-          gradle-version: 8.2.1
+          gradle-jdk: 17
 
-      - name: Generate debug keystore
-        working-directory: android-app
+      - name: Generate Debug Keystore for Release Signing
         run: |
-          keytool -genkeypair -v -keystore app/debug.keystore \
-            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
+          mkdir -p android-app/app
+          keytool -genkeypair -v -keystore android-app/app/debug.keystore \
+            -alias androiddebugkey -keypass android -storepass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-      - name: Build APK
+      - name: Build Release APK
         working-directory: android-app
         run: |
-          echo "=== Environment ==="
-          echo "JAVA_HOME=$JAVA_HOME"
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          which gradle
-          gradle --version
-          echo "=== Building APK ==="
-          set -o pipefail
-          gradle clean assembleRelease --no-daemon --console=plain --stacktrace 2>&1 | tee build-log.txt
-          BUILD_EXIT=${PIPESTATUS[0]}
-          echo "BUILD EXIT CODE: $BUILD_EXIT"
-          exit $BUILD_EXIT
+          chmod +x gradlew
+          ./gradlew assembleRelease
 
-      - name: Push build log via git
-        if: always()
-        working-directory: android-app
+      - name: Find and Rename APK
+        id: find_apk
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add build-log.txt || true
-          git diff --cached --stat || true
-          git commit -m "build log" || echo "Nothing to commit"
-          git push origin HEAD:android-gateway || echo "Push failed (non-fatal)"
+          RAW_APK=$(find android-app/app/build/outputs/apk/release -name "*.apk" | head -1)
+          echo "Found APK: $RAW_APK"
+          FINAL_NAME="freellm-gateway-${{ matrix.abi }}-release.apk"
+          cp "$RAW_APK" "$FINAL_NAME"
+          echo "apk_path=$FINAL_NAME" >> $GITHUB_OUTPUT
 
-      - name: Search for APK
-        if: always()
-        working-directory: android-app
-        run: |
-          echo "=== APK files ==="
-          find . -name "*.apk" -type f 2>/dev/null
-          echo "=== Build outputs ==="
-          ls -la app/build/outputs/ 2>/dev/null || echo "No outputs dir"
-          ls -la app/build/outputs/apk/ 2>/dev/null || echo "No apk dir"
-          ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "No release dir"
-
-      - name: Upload build log artifact
-        if: always()
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build-log
-          path: android-app/build-log.txt
-          if-no-files-found: warn
+          name: freellm-gateway-${{ matrix.abi }}
+          path: ${{ steps.find_apk.outputs.apk_path }}
 
-      - name: Upload APK artifact
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Create Release
+        if: github.ref == 'refs/heads/android-gateway'
+        uses: softprops/action-gh-release@v2
         with:
-          name: freellm-gateway-apk
-          path: |
-            android-app/app/build/outputs/**/*.apk
-          if-no-files-found: warn
+          files: ${{ steps.find_apk.outputs.apk_path }}
+          name: "FreeLLM Gateway ${{ matrix.abi }} (${{ github.sha }})"
+          tag_name: "release-${{ matrix.abi }}"
+          body: |
+            ### FreeLLM Gateway Android App
+            - Architecture: `${{ matrix.abi }}`
+            - Commit: `${{ github.sha }}`
+            - Automated GitHub Actions build
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
